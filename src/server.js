@@ -77,7 +77,18 @@ app.get('/api/diag', safe(async (req, res) => {
   const text = await r.text();
   let ids = null;
   try { ids = (JSON.parse(text).data || []).map((m) => m.id); } catch {}
-  res.json({ status: r.status, models: ids, raw: ids ? undefined : text.slice(0, 400), spark: SPARK });
+  const probes = [];
+  if (req.query.probe) {
+    const base = process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1';
+    const h = { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' };
+    for (const model of ['muse-spark-1.3', 'muse-spark-1.2', 'muse-wonder-1.0']) {
+      const c = await fetch(`${base}/chat/completions`, { method: 'POST', headers: h, body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Say OK' }], max_completion_tokens: 50 }) });
+      probes.push({ api: 'chat', model, status: c.status, body: (await c.text()).slice(0, 160) });
+      const x = await fetch(`${base}/responses`, { method: 'POST', headers: h, body: JSON.stringify({ model, input: 'Say OK' }) });
+      probes.push({ api: 'responses', model, status: x.status, body: (await x.text()).slice(0, 160) });
+    }
+  }
+  res.json({ status: r.status, models: ids, raw: ids ? undefined : text.slice(0, 400), spark: SPARK, probes });
 }));
 
 // ---- text ----
