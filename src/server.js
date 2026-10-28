@@ -70,6 +70,16 @@ const safe = (fn) => async (req, res) => {
   }
 };
 
+// Which models this key can reach (names only; the key is never returned).
+app.get('/api/diag', safe(async (req, res) => {
+  if (!hasKey()) return res.json({ mode: 'demo' });
+  const r = await fetch(`${process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1'}/models`, { headers: { Authorization: `Bearer ${process.env.MODEL_API_KEY}` } });
+  const text = await r.text();
+  let ids = null;
+  try { ids = (JSON.parse(text).data || []).map((m) => m.id); } catch {}
+  res.json({ status: r.status, models: ids, raw: ids ? undefined : text.slice(0, 400), spark: SPARK });
+}));
+
 // ---- text ----
 app.post('/api/message', safe(async (req, res) => {
   const { threadId, text, phone } = req.body || {};
