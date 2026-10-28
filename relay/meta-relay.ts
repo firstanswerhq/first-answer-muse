@@ -5,9 +5,9 @@
 //
 // - Our server sends its own Authorization: Bearer <Meta key>; the relay forwards it untouched.
 //   The Meta key is never stored here.
-// - Only calls carrying x-relay-key = this project's anon key are accepted, and only Meta
-//   Model API paths are forwarded, so it is not an open proxy.
-// - Deploy with "Verify JWT" turned OFF (the x-relay-key check replaces it).
+// - It forwards only Meta Model API paths, and only requests that carry a Meta key
+//   (Authorization: Bearer LLM_...), so it can't be used to reach anything but Meta's API.
+// - Deploy with "Verify JWT" turned OFF (the Meta-key check replaces it).
 
 const META = "https://api.meta.ai/v1";
 const ALLOWED = /^\/(models(\/[\w.\-]+)?|chat\/completions|responses(\/[\w\-]+)?|images\/(edits|generations)|asr\/transcribe|files(\/[\w\-]+)?)$/;
@@ -19,13 +19,9 @@ Deno.serve(async (req: Request) => {
 
   if (path === "/health") return Response.json({ ok: true, relay: "meta-relay" });
 
-  const expected = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-  if (!expected || req.headers.get("x-relay-key") !== expected) {
-    return Response.json({ error: "forbidden" }, { status: 403 });
-  }
   if (!ALLOWED.test(path)) return Response.json({ error: "path not allowed" }, { status: 404 });
-  const auth = req.headers.get("authorization");
-  if (!auth) return Response.json({ error: "missing authorization" }, { status: 401 });
+  const auth = req.headers.get("authorization") ?? "";
+  if (!/^Bearer LLM_\S+$/.test(auth)) return Response.json({ error: "Meta Model API key required" }, { status: 401 });
 
   const headers = new Headers({ authorization: auth });
   for (const h of ["content-type", "accept"]) {
