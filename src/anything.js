@@ -379,7 +379,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
 
 // Face: SAM outlines the card, the face, both eyes, the nose and the mouth at once.
 async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
-  const concepts = ['card', 'face', 'eye', 'nose', 'mouth'];
+  const concepts = ['card', 'eye', 'nose', 'mouth'];
   let segs;
   try {
     segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
@@ -387,40 +387,37 @@ async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
     pipeline.push({ model: 'sam-3.1', step: 'outline the face', error: String(e.message).slice(0, 200) });
     return finishErr(read, pipeline, 'Couldn’t outline the photo just now; please send it again.', 'face');
   }
-  const [cardS, faceS, eyeS, noseS, mouthS] = segs;
-  const frame = cardS.frame || faceS.frame || eyeS.frame;
-  const card = best(cardS.objects), face = best(faceS.objects), nose = best(noseS.objects), mouth = best(mouthS.objects);
+  const [cardS, eyeS, noseS, mouthS] = segs;
+  const frame = cardS.frame || eyeS.frame || noseS.frame;
+  const card = best(cardS.objects), nose = best(noseS.objects), mouth = best(mouthS.objects);
   // Every 'eye' SAM returns (maybe eyebrows or glasses too); face.js picks the real pair by shape and position.
   const eyes = eyeS.objects.filter((o) => o.c == null || o.c >= 0.3).slice(0, 8);
-  pipeline.push({ model: 'sam-3.1', step: 'outline: card, face, eyes, nose, mouth', result: { card: cardS.objects.length, face: faceS.objects.length, eyes: eyeS.objects.length, nose: noseS.objects.length, mouth: mouthS.objects.length } });
-  const outlines = [outlineOf(card, 'gift card', 'ruler'), outlineOf(nose, 'nose', 'target'), outlineOf(mouth, 'mouth', 'target')].filter(Boolean);
-  const overlay = { frame, outlines, lines: [] };
-  if (!card) return finishErr(read, pipeline, 'Hold a gift card flat against your forehead, all four corners showing, and send one more.', 'face', overlay);
-  const f = measureFace({ card, eyes, nose, mouth, frame, focal35, refKind: 'card' });
-  pipeline.push({ model: 'first-answer math', step: 'map the face to millimeters with the card', result: f.ok ? { confidence: f.confidence, phoneDistanceMm: f.distanceMm, pose: f.pose } : f.ask });
+  pipeline.push({ model: 'sam-3.1', step: 'outline: card, eyes, nose, mouth', result: { card: cardS.objects.length, eyes: eyeS.objects.length, nose: noseS.objects.length, mouth: mouthS.objects.length } });
+  const overlay = { frame, outlines: [outlineOf(card, 'gift card', 'ruler')].filter(Boolean), lines: [] };
+  const f = measureFace({ card, eyes, nose, mouth, frame, focal35 });
+  pipeline.push({ model: 'first-answer math', step: 'scale the face with the card', result: f.ok ? { confidence: f.confidence, phoneDistanceMm: f.distanceMm, headTurnDeg: f.yawDeg } : f.ask });
   if (!f.ok) return finishErr(read, pipeline, f.ask, 'face', overlay);
-  // The two eyes face.js actually used: outline them and draw the line between their centers.
-  const usedEyes = eyes.filter((e) => f.eyeCentersPx && e);
-  for (const e of usedEyes) {
-    const cx = (e.box.x1 + e.box.x2) / 2, cy = (e.box.y1 + e.box.y2) / 2;
-    if (f.eyeCentersPx.some(([x, y]) => Math.hypot(x - cx, y - cy) < Math.max(e.box.x2 - e.box.x1, 10))) overlay.outlines.push(outlineOf(e, 'eye', 'target'));
-  }
+  for (const e of f.eyeObjects) overlay.outlines.push(outlineOf(e, 'eye', 'target'));
+  for (const [o, l] of [[nose, 'nose'], [mouth, 'mouth']]) if (o) overlay.outlines.push(outlineOf(o, l, 'target'));
   overlay.lines.push({ from: f.eyeCentersPx[0], to: f.eyeCentersPx[1], label: `${f.numbers.eyeCenterDistanceMm} mm` });
   const mmIn = (v) => (v == null ? null : `${v} mm (${(v / 25.4).toFixed(2)} in)`);
-  const s = f.symmetry;
-  const symLine = s
-    ? ` The eyes sit ${s.leftEyeToMidlineMm} mm (photo left) and ${s.rightEyeToMidlineMm} mm (photo right) from the midline of the nose, a ${s.midlineDifferenceMm} mm difference; eye widths differ by ${s.eyeWidthDifferenceMm} mm.`
-    : ' Left-right comparison needs the nose clearly in the shot.';
+  const sy = f.symmetry;
+  let symLine;
+  if (!sy) symLine = f.numbers.noseWidthMm == null ? ' A left-right comparison needs the nose clearly in the shot.' : ' For a left-right comparison, send a photo facing the camera dead straight.';
+  else {
+    const mid = sy.midlineSame
+      ? 'Both eyes sit about the same distance from the midline of the nose (within what one photo can show)'
+      : `The eyes sit ${sy.leftEyeToMidlineMm} mm (photo left) and ${sy.rightEyeToMidlineMm} mm (photo right) from the midline of the nose`;
+    const wid = sy.widthSame ? 'and the eye widths are about the same.' : `and the eye widths differ by ${sy.eyeWidthDifferenceMm} mm.`;
+    symLine = ` ${mid}, ${wid}`;
+  }
   return finish({
     task: 'face', read, overlay, pipeline,
     headline: `Eye centers ${f.numbers.eyeCenterDistanceMm} mm apart`,
     answer: `Measured against the gift card on your forehead${f.distanceMm ? `, phone about ${Math.round(f.distanceMm / 25.4)} in away` : ''}.${symLine}`,
-    numbers: [
-      ...Object.entries(f.numbers).filter(([, v]) => v != null).map(([k, v]) => ({ label: faceLabel(k), value: mmIn(v) })),
-      ...(s ? [{ label: 'Midline difference', value: `${s.midlineDifferenceMm} mm` }] : []),
-    ],
+    numbers: Object.entries(f.numbers).filter(([, v]) => v != null).map(([k, v]) => ({ label: faceLabel(k), value: mmIn(v) })),
     shopping: [],
-    steps: ['Same spot, same light, same card each time.', 'Face the camera straight on, phone at eye level, arm’s length.', 'One photo is good to about ±5% for eye spacing.'],
+    steps: ['Same spot, same light, same card each time.', 'Face the camera straight on, phone at eye level, arm’s length.', 'One photo is good to about ±5% for eye spacing; nose and mouth are rough.'],
     confidence: f.confidence,
     ask: f.fixes.length ? f.fixes.join(' ') : null,
     note: FACE_NOTE,
