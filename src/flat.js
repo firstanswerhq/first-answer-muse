@@ -271,6 +271,16 @@ function rectMap(refPts, R, boundary = []) {
   return { toMm: (p) => applyH(H, p), areaScale: (p) => jacobianDet(H, p[0], p[1]), corners: c, shapeCheck: ratio };
 }
 
+// A ready-made photo-to-millimeters map from any everyday ruler (used by face.js and others).
+export function rulerMap(ref, refKind) {
+  const R = FLAT_REFERENCES[refKind];
+  if (!R || !ref) return null;
+  const pts = maskPoints(ref, 20000).pts;
+  if (pts.length < 30) return null;
+  const map = R.shape === 'circle' ? circleMap(pts, R) : rectMap(pts, R, maskBoundary(ref));
+  return map ? { ...map, R } : null;
+}
+
 // From a coin: undo the tilt by stretching the oval's short axis, then scale by the diameter.
 function circleMap(refPts, R) {
   const n = refPts.length;

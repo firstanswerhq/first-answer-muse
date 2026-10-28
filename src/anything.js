@@ -12,6 +12,7 @@ import { measureFlat, FLAT_REFERENCES, maskBoundary } from './flat.js';
 import { best } from './measure.js';
 import { calibrate, gapBetween, heightOf, distanceTo, contactPoints, fitCheck, ftIn, UPRIGHT } from './distance.js';
 import { plan as tilePlan } from './tiles.js';
+import { measureFace, faceLabel, NOTE as FACE_NOTE } from './face.js';
 import { decodeMaskToSVGPath } from '@meta-sam/parser';
 
 export const TASKS = ['face', 'floor_tile', 'windshield_chip', 'shoe_size', 'gap_fit', 'height', 'distance', 'size'];
@@ -224,7 +225,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   if (read.ruler === 'none') read.ruler = DEFAULT_RULER[read.task];
 
   if (!live) return finishErr(read, pipeline, 'Measuring needs the Meta models switched on for this server.');
-  if (read.task === 'face') return finishErr(read, pipeline, 'Face measuring is being added next.', 'face');
+  if (read.task === 'face') return faceFlow({ dataUrl, live, read, pipeline });
 
   // 2. Outline the target(s) and the ruler at the same time.
   const upright = Boolean(UPRIGHT_CONCEPT[read.ruler]);
@@ -373,6 +374,46 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
     numbers: [{ label: 'Length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'Width', value: inchStr(m.widthMm) }, { label: 'Area', value: `${m.areaIn2} sq in` }],
     shopping: [], steps: ['Send the same shot again later to see if it changed.'],
     confidence: m.confidence, ask: tips,
+  });
+}
+
+// Face: SAM outlines the card, the face, both eyes, the nose and the mouth at once.
+async function faceFlow({ dataUrl, live, read, pipeline }) {
+  const concepts = ['card', 'face', 'eye', 'nose', 'mouth'];
+  let segs;
+  try {
+    segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
+  } catch (e) {
+    pipeline.push({ model: 'sam-3.1', step: 'outline the face', error: String(e.message).slice(0, 200) });
+    return finishErr(read, pipeline, 'Couldn’t outline the photo just now; please send it again.', 'face');
+  }
+  const [cardS, faceS, eyeS, noseS, mouthS] = segs;
+  const frame = cardS.frame || faceS.frame || eyeS.frame;
+  const card = best(cardS.objects), face = best(faceS.objects), nose = best(noseS.objects), mouth = best(mouthS.objects);
+  const eyes = eyeS.objects.filter((o) => o.c == null || o.c >= 0.35).sort((a, b) => (b.c ?? 1) - (a.c ?? 1)).slice(0, 2);
+  pipeline.push({ model: 'sam-3.1', step: 'outline: card, face, eyes, nose, mouth', result: { card: cardS.objects.length, face: faceS.objects.length, eyes: eyeS.objects.length, nose: noseS.objects.length, mouth: mouthS.objects.length } });
+  const outlines = [outlineOf(card, 'gift card', 'ruler'), outlineOf(face, 'face', 'target'), ...eyes.map((e) => outlineOf(e, 'eye', 'target')), outlineOf(nose, 'nose', 'target'), outlineOf(mouth, 'mouth', 'target')].filter(Boolean);
+  const overlay = { frame, outlines, lines: [] };
+  if (!card) return finishErr(read, pipeline, 'Hold a gift card flat against your forehead, all four corners showing, and send one more.', 'face', overlay);
+  const f = measureFace({ card, face, eyes, nose, mouth, refKind: 'card' });
+  pipeline.push({ model: 'first-answer math', step: 'map the face to millimeters with the card', result: f.ok ? { confidence: f.confidence, symmetry: f.symmetry.overallPct } : f.ask });
+  if (!f.ok) return finishErr(read, pipeline, f.ask, 'face', overlay);
+  // Line between the eye centers.
+  if (eyes.length === 2) {
+    const c = eyes.map((e) => [(e.box.x1 + e.box.x2) / 2, (e.box.y1 + e.box.y2) / 2]).sort((a, b) => a[0] - b[0]);
+    overlay.lines.push({ from: c[0], to: c[1], label: `${f.numbers.eyeCenterDistanceMm} mm` });
+  }
+  const mmIn = (v) => (v == null ? null : `${v} mm (${(v / 25.4).toFixed(2)} in)`);
+  return finish({
+    task: 'face', read, overlay, pipeline,
+    headline: `${f.symmetry.overallPct}% symmetric`,
+    answer: `Measured against the gift card on your forehead. Eye center to eye center is ${f.numbers.eyeCenterDistanceMm} mm. Your eyes sit ${f.symmetry.leftEyeFromMidlineMm} and ${f.symmetry.rightEyeFromMidlineMm} mm from the midline, and their widths match ${f.symmetry.eyeWidthPct}%. Send the same kind of photo at each visit to track changes.`,
+    numbers: Object.entries(f.numbers).filter(([, v]) => v != null).map(([k, v]) => ({ label: faceLabel(k), value: mmIn(v) })),
+    shopping: [],
+    steps: ['Same spot, same light, same card on every visit.', 'Face the camera straight on, phone at eye level, arm’s length.', 'Changes over 2 mm get flagged when you compare visits.'],
+    confidence: f.confidence,
+    ask: f.fixes.length ? f.fixes.join(' ') : null,
+    note: FACE_NOTE,
   });
 }
 
