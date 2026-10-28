@@ -19,6 +19,17 @@ export const FLAT_REFERENCES = {
   penny: { label: 'penny', shape: 'circle', diameter: 19.05, samConcept: 'coin' },
   nickel: { label: 'nickel', shape: 'circle', diameter: 21.21, samConcept: 'coin' },
   dime: { label: 'dime', shape: 'circle', diameter: 17.91, samConcept: 'coin' },
+  // Canada (the US nickel and dime are close but not the same; the Canadian quarter is smaller than the US one)
+  ca_quarter: { label: 'Canadian quarter', shape: 'circle', diameter: 23.88, samConcept: 'coin' },
+  ca_dime: { label: 'Canadian dime', shape: 'circle', diameter: 18.03, samConcept: 'coin' },
+  ca_nickel: { label: 'Canadian nickel', shape: 'circle', diameter: 21.2, samConcept: 'coin' },
+  loonie: { label: 'loonie', shape: 'circle', diameter: 26.5, samConcept: 'coin' },
+  toonie: { label: 'toonie', shape: 'circle', diameter: 28.0, samConcept: 'coin' },
+  // Europe and the UK
+  euro_1: { label: '1 euro coin', shape: 'circle', diameter: 23.25, samConcept: 'coin' },
+  euro_2: { label: '2 euro coin', shape: 'circle', diameter: 25.75, samConcept: 'coin' },
+  uk_pound: { label: '£1 coin', shape: 'circle', diameter: 23.43, samConcept: 'coin' },
+  uk_2p: { label: '2p coin', shape: 'circle', diameter: 25.9, samConcept: 'coin' },
   card: { label: 'gift or hotel card', shape: 'rect', long: 85.6, short: 53.98, samConcept: 'card' },
   paper_letter: { label: 'sheet of printer paper', shape: 'rect', long: 279.4, short: 215.9, samConcept: 'sheet of paper' },
   paper_a4: { label: 'A4 sheet of paper', shape: 'rect', long: 297, short: 210, samConcept: 'sheet of paper' },

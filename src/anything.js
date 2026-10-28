@@ -15,7 +15,7 @@ import { plan as tilePlan } from './tiles.js';
 import { decodeMaskToSVGPath } from '@meta-sam/parser';
 
 export const TASKS = ['face', 'floor_tile', 'windshield_chip', 'shoe_size', 'gap_fit', 'height', 'distance', 'size'];
-const RULERS = ['quarter', 'penny', 'nickel', 'dime', 'card', 'paper_letter', 'dollar', 'soda_can', 'license_plate', 'interior_door', 'front_door', 'double_garage_door', 'single_garage_door', 'none'];
+const RULERS = ['quarter', 'penny', 'nickel', 'dime', 'ca_quarter', 'ca_dime', 'ca_nickel', 'loonie', 'toonie', 'euro_1', 'euro_2', 'uk_pound', 'uk_2p', 'card', 'paper_letter', 'dollar', 'soda_can', 'license_plate', 'interior_door', 'front_door', 'double_garage_door', 'single_garage_door', 'none'];
 const UPRIGHT_CONCEPT = { interior_door: 'door', front_door: 'front door', double_garage_door: 'garage door', single_garage_door: 'garage door' };
 
 const READ_PROMPT = `You read photos people text to First Answer to get something measured. Return JSON only.
@@ -30,7 +30,7 @@ task: what they want —
   size (anything else: how big is this).
 target: a short noun phrase naming the thing to measure, the way you'd label it in the photo ("chip", "crack", "foot", "floor", "fence", "tree", "stain").
 second_target: for gap_fit, the other side of the gap ("house wall", "garage"); else "".
-ruler: the everyday object of known size in the photo, from the list; prefer one lying flat right beside the target; doors count for gap_fit, height and distance. "none" if nothing. For a coin, look hard at which one: a penny is copper-colored; a dime is the smallest silver coin and thin; a nickel is thick with a smooth edge; a quarter is the biggest common coin with a ridged edge. Compare it with nearby things of known size. If unsure between dime and quarter, pick quarter (it is the coin people use to measure).
+ruler: the everyday object of known size in the photo, from the list; prefer one lying flat right beside the target; doors count for gap_fit, height and distance. "none" if nothing. For a coin, look hard at which one: a penny is copper-colored; a dime is the smallest silver coin and thin; a nickel is thick with a smooth edge; a quarter is the biggest common coin with a ridged edge. Compare it with nearby things of known size. If unsure between dime and quarter, pick quarter (it is the coin people use to measure). Canadian coins: a loonie is gold-colored with 11 sides (often a loon); a toonie is two-tone (silver ring, gold center); a Canadian quarter shows a caribou; Canadian coins show the King or Queen. Euro and UK coins: name the 1 or 2 euro coin, the £1 (12-sided, two-tone) or the 2p (copper). If the message names the coin or the country, go with it.
 item_width_in: for gap_fit, the width in inches of the thing they want to fit, from their message (a 12 ft shed = 144); else 0.
 tile_w_in, tile_l_in: tile size in inches if they said it, else 0.
 shoe_for: "men", "women" or "unknown", from the message.
@@ -52,6 +52,20 @@ const READ_SCHEMA = {
   required: ['task', 'target', 'second_target', 'ruler', 'item_width_in', 'tile_w_in', 'tile_l_in', 'shoe_for', 'summary'],
   additionalProperties: false,
 };
+
+// The coin the person names, if any ("it's a loonie", "Canadian quarter", "a 2 euro coin").
+export function coinFromText(t) {
+  const ca = /canad|loonie|toonie/.test(t);
+  if (/toonie|\$2 coin|two dollar coin/.test(t)) return 'toonie';
+  if (/loonie|\$1 coin|one dollar coin/.test(t)) return 'loonie';
+  if (/(2|two)[ -]?euro/.test(t)) return 'euro_2';
+  if (/(1|one)[ -]?euro/.test(t)) return 'euro_1';
+  if (/£1|pound coin/.test(t)) return 'uk_pound';
+  if (/\b2p\b|two pence/.test(t)) return 'uk_2p';
+  const m = t.match(/\b(quarter|dime|nickel|penny)\b/);
+  if (!m) return null;
+  return ca && m[1] !== 'penny' ? `ca_${m[1]}` : m[1];
+}
 
 // What people type, read without the model (used when there's no key, and to back up the model).
 export function guessFromText(text = '') {
@@ -77,7 +91,7 @@ export function guessFromText(text = '') {
     tile_w_in: tile ? +tile[1] : 0,
     tile_l_in: tile ? +tile[2] : 0,
     shoe_for: /women|woman|her\b|ladies/.test(t) ? 'women' : /\bmen\b|man\b|his\b/.test(t) ? 'men' : 'unknown',
-    coin: (t.match(/\b(quarter|dime|nickel|penny)\b/) || [])[1] || null,
+    coin: coinFromText(t),
     _num: num,
   };
 }

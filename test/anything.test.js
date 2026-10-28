@@ -123,3 +123,15 @@ test('a square coaster next to a coin: two sides, not the diagonal; "it’s a qu
   const d = await measureAnything({ dataUrl: 'x', text: 'how big is this', deps: deps(R({ target: 'coaster', ruler: 'dime' }), scene) });
   assert.match(d.ask, /dime as the ruler/);
 });
+
+test('coins from other countries are named and sized', async () => {
+  const { coinFromText } = await import('../src/anything.js');
+  const { FLAT_REFERENCES } = await import('../src/flat.js');
+  assert.equal(coinFromText("it's a loonie"), 'loonie');
+  assert.equal(coinFromText('canadian quarter next to it'), 'ca_quarter');
+  assert.equal(coinFromText('used a toonie'), 'toonie');
+  assert.equal(coinFromText('a 2 euro coin'), 'euro_2');
+  assert.equal(coinFromText('quarter'), 'quarter');
+  assert.equal(FLAT_REFERENCES.loonie.diameter, 26.5);
+  assert.ok(FLAT_REFERENCES.ca_quarter.diameter < FLAT_REFERENCES.quarter.diameter);
+});
