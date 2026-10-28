@@ -70,6 +70,9 @@ const safe = (fn) => async (req, res) => {
   }
 };
 
+// Meta's request ID for a call (support asks for these; they are not secrets).
+const reqId = (r) => r.headers.get('x-request-id') || r.headers.get('request-id') || r.headers.get('x-fb-trace-id') || r.headers.get('x-meta-request-id') || null;
+
 // Which models this key can reach (names only; the key is never returned).
 app.get('/api/diag', safe(async (req, res) => {
   if (!hasKey()) return res.json({ mode: 'demo' });
@@ -83,12 +86,14 @@ app.get('/api/diag', safe(async (req, res) => {
     const h = { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' };
     for (const model of ['muse-spark-1.3', 'muse-spark-1.2', 'muse-wonder-1.0']) {
       const c = await fetch(`${base}/chat/completions`, { method: 'POST', headers: h, body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Say OK' }], max_completion_tokens: 50 }) });
-      probes.push({ api: 'chat', model, status: c.status, body: (await c.text()).slice(0, 160) });
+      probes.push({ api: 'chat', model, status: c.status, at: new Date().toISOString(), requestId: reqId(c), body: (await c.text()).slice(0, 160) });
       const x = await fetch(`${base}/responses`, { method: 'POST', headers: h, body: JSON.stringify({ model, input: 'Say OK' }) });
-      probes.push({ api: 'responses', model, status: x.status, body: (await x.text()).slice(0, 160) });
+      probes.push({ api: 'responses', model, status: x.status, at: new Date().toISOString(), requestId: reqId(x), body: (await x.text()).slice(0, 160) });
     }
   }
-  res.json({ status: r.status, models: ids, raw: ids ? undefined : text.slice(0, 400), spark: SPARK, probes });
+  // Response header names (not values) from /models, so we can see where Meta puts its request ID.
+  const headerNames = [...r.headers.keys()];
+  res.json({ status: r.status, at: new Date().toISOString(), requestId: reqId(r), headerNames, models: ids, raw: ids ? undefined : text.slice(0, 400), spark: SPARK, probes });
 }));
 
 // ---- text ----
