@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>First Answer · Owner</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span> First Answer <span class="on">on Meta Muse</span></div>
+  <nav><a href="/">Customer</a><a href="/owner.html" class="active">Owner view</a></nav>
+</header>
+<section class="board">
+  <h1 id="title">Your front desk</h1>
+  <div class="sub">Every text, photo, voicemail and call, answered and logged as it happens.</div>
+  <div class="kpis">
+    <div class="kpi"><b id="kLeads">0</b><span>new leads</span></div>
+    <div class="kpi"><b id="kBooked">0</b><span>jobs booked</span></div>
+    <div class="kpi"><b id="kValue">$0</b><span>booked work</span></div>
+    <div class="kpi"><b id="kMissed">0</b><span>leads left waiting</span></div>
+  </div>
+  <div class="feed" id="feed"></div>
+</section>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const leads = new Map();
+const bookings = new Map();
+const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+function render() {
+  const all = [...leads.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  $('feed').innerHTML = all.length ? all.map((l) => {
+    const b = l.bookingId ? bookings.get(l.bookingId) : null;
+    return `<div class="card"><div class="row"><span class="chan ${l.channel}">${esc(l.channel)}</span><b>${esc(l.name || l.phone || 'New customer')}</b>
+      <span class="status ${l.status === 'booked' ? 'booked' : ''}">${esc(l.status)}</span><span class="when">${time(l.createdAt)}</span></div>
+      ${l.summary ? `<p>${esc(l.summary)}</p>` : ''}
+      ${l.transcript ? `<p><i>Voicemail:</i> "${esc(l.transcript)}"</p>` : ''}
+      ${l.quote ? `<p>Quoted: ${esc(l.quote.serviceName)}, ${esc(l.quote.detail)}, <b>$${l.quote.total}</b></p>` : ''}
+      ${l.notes ? `<p>Crew note: ${esc(l.notes)}</p>` : ''}
+      ${b ? `<p>Booked <b>${esc(b.when)}</b> · ${esc(b.customer)} · ${esc(b.address)} · <b>$${b.quoteTotal}</b></p>` : ''}
+    </div>`;
+  }).join('') : '<div class="card"><p>No leads yet. Open the customer view and send a text.</p></div>';
+  $('kLeads').textContent = all.length;
+  $('kBooked').textContent = bookings.size;
+  $('kValue').textContent = `$${[...bookings.values()].reduce((n, b) => n + b.quoteTotal, 0)}`;
+  $('kMissed').textContent = all.filter((l) => l.status === 'new' || l.status === 'needs owner').length;
+}
+
+async function refresh() {
+  const s = await (await fetch('/api/owner/feed')).json();
+  s.leads.forEach((l) => leads.set(l.id, l));
+  s.bookings.forEach((b) => bookings.set(b.id, b));
+  render();
+}
+const es = new EventSource('/api/events');
+['hello', 'lead', 'booking', 'photo', 'voicemail', 'message'].forEach((k) => es.addEventListener(k, refresh));
+fetch('/api/business').then((r) => r.json()).then((b) => ($('title').textContent = `${b.name}: front desk`));
+refresh();
+</script>
+</body>
+</html>

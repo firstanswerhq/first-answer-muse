@@ -1,0 +1,23 @@
+{
+  "name": "first-answer-muse",
+  "version": "0.1.0",
+  "description": "First Answer on Meta Muse: an AI front desk for local service businesses. Text, photo or voicemail in; a real quote and a booked time out.",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "author": "Colby Barrett (First Answer)",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^4.22.3",
+    "multer": "^2.5.0",
+    "openai": "^7.45.1",
+    "ws": "^8.22.0"
+  }
+}

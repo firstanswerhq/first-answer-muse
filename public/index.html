@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>First Answer on Muse</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span> First Answer <span class="on">on Meta Muse</span></div>
+  <nav><a href="/" class="active">Customer</a><a href="/owner.html" target="_blank">Owner view</a></nav>
+</header>
+
+<main class="stage">
+  <section class="phone" aria-label="Customer phone">
+    <div class="phone-head">
+      <div class="avatar" id="bizInitial">B</div>
+      <div>
+        <div class="biz" id="bizName">Brightside Exterior Care</div>
+        <div class="sub" id="bizSub">Usually answers in seconds</div>
+      </div>
+      <button class="call" id="callBtn" title="Call the business">Call</button>
+    </div>
+
+    <div class="thread" id="thread" aria-live="polite"></div>
+
+    <div class="callbar hidden" id="callbar">
+      <div class="meter"><span id="meter"></span></div>
+      <div class="live" id="liveText">Listening...</div>
+      <button class="hang" id="hangBtn">End call</button>
+    </div>
+
+    <form class="compose" id="compose">
+      <label class="iconbtn" title="Send a photo">
+        <input type="file" id="photoIn" accept="image/*" hidden>
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M9 4 7.2 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.2L15 4H9zm3 5a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>
+      </label>
+      <button type="button" class="iconbtn" id="vmBtn" title="Leave a voicemail">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+      </button>
+      <input id="textIn" autocomplete="off" placeholder="Text Brightside...">
+      <button class="send" type="submit">Send</button>
+    </form>
+  </section>
+
+  <aside class="hood" aria-label="What happened behind the scenes">
+    <h2>Under the hood</h2>
+    <p class="lead">Every answer on the left was made by Meta models. Prices and times come only from the business's own price list and calendar; the model calls tools to get them.</p>
+    <div class="mode" id="mode">Checking...</div>
+    <ol class="steps" id="steps"></ol>
+    <div class="try">
+      <h3>Try it</h3>
+      <button class="chip" data-say="Hi, how much to clean the windows on my house?">Ask about windows</button>
+      <button class="chip" data-sample="house">Send a sample house photo</button>
+      <button class="chip" data-say="Can you pressure wash a 2-car driveway?">Driveway quote</button>
+      <button class="chip" data-vm="1">Leave a voicemail</button>
+    </div>
+  </aside>
+</main>
+
+<div class="recording hidden" id="recording">
+  <div class="rec-card">
+    <div class="rec-dot"></div>
+    <div><b>Recording voicemail</b><div class="sub" id="recTime">0:00</div></div>
+    <button id="recStop" class="send">Stop and send</button>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

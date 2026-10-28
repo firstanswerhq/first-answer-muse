@@ -1,0 +1,142 @@
+// Thin client for the Meta Model API (https://api.meta.ai/v1).
+// Muse Spark for the conversation and the photo read, SAM 3.1 for counting what's in the photo,
+// Muse Voice Transcribe for voicemail. The key is read from MODEL_API_KEY and never logged.
+
+import OpenAI from 'openai';
+
+export const BASE_URL = process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1';
+export const SPARK = process.env.MUSE_SPARK_MODEL || 'muse-spark-1.3';
+export const SAM = 'sam-3.1';
+export const TRANSCRIBE = 'muse-voice-transcribe-1.0';
+
+export const hasKey = () => Boolean(process.env.MODEL_API_KEY);
+
+let client;
+function api() {
+  if (!client) client = new OpenAI({ baseURL: BASE_URL, apiKey: process.env.MODEL_API_KEY, timeout: 60_000, maxRetries: 2 });
+  return client;
+}
+
+// One Chat Completions call with tools. Returns the assistant message.
+export async function sparkChat({ messages, tools, effort = 'low' }) {
+  const r = await api().chat.completions.create({
+    model: SPARK,
+    messages,
+    tools,
+    tool_choice: tools?.length ? 'auto' : undefined,
+    reasoning_effort: effort,
+  });
+  return { message: r.choices[0].message, usage: r.usage };
+}
+
+// Muse Spark reads a photo and returns structured JSON about the job in it.
+export async function sparkReadPhoto({ dataUrl, prompt, schema }) {
+  const r = await api().chat.completions.create({
+    model: SPARK,
+    reasoning_effort: 'low',
+    messages: [
+      { role: 'developer', content: prompt },
+      { role: 'user', content: [{ type: 'image_url', image_url: { url: dataUrl } }, { type: 'text', text: 'Read this photo.' }] },
+    ],
+    response_format: { type: 'json_schema', json_schema: { name: 'photo_read', strict: true, schema } },
+  });
+  return JSON.parse(r.choices[0].message.content);
+}
+
+// SAM 3.1: segment every instance of a short noun phrase. Non-streaming; same text format as the stream.
+export async function samSegment({ dataUrl, concept }) {
+  const res = await fetch(`${BASE_URL}/responses`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: SAM,
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: concept }, { type: 'input_image', image_url: dataUrl }] }],
+      metadata: { include_confidence: 'true' },
+    }),
+  });
+  if (!res.ok) throw new Error(`SAM ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const body = await res.json();
+  const text = body.output_text ?? (body.output || []).flatMap((o) => o.content || []).map((c) => c.text || '').join('');
+  return parseSam(text);
+}
+
+// Parse SAM's special-token text into boxes. We only need boxes (count + area), not the masks.
+// Line: <0f>id<|box;x1=..;y1=..;x2=..;y2=..;w=..;h=..;c=..|><|mask;...|>,id<|box...|>...
+export function parseSam(text) {
+  const objects = [];
+  if (!text) return { objects, frame: null };
+  const line = text.split('\n').find((l) => l.startsWith('<0f>')) || text.split('\n')[0];
+  const re = /(\d+)<\|box;([^|]*)\|>/g;
+  let m, frame = null;
+  while ((m = re.exec(line))) {
+    const kv = Object.fromEntries(m[2].split(';').map((p) => p.split('=')));
+    const box = { x1: +kv.x1, y1: +kv.y1, x2: +kv.x2, y2: +kv.y2 };
+    frame = { w: +kv.w, h: +kv.h };
+    objects.push({ id: +m[1], box, c: kv.c !== undefined ? +kv.c : null, areaShare: ((box.x2 - box.x1) * (box.y2 - box.y1)) / (+kv.w * +kv.h) });
+  }
+  return { objects, frame };
+}
+
+// Muse Voice Transcribe: one WAV (mono 16-bit PCM, 16 or 24 kHz, up to 10 minutes) in, text out.
+export async function transcribeWav(wavBuffer) {
+  const form = new FormData();
+  form.append('request', new Blob([JSON.stringify({ model: TRANSCRIBE, audioEncoding: 'WAV', mode: 'ENDPOINTING' })], { type: 'application/json' }));
+  form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'voicemail.wav');
+  const res = await fetch(`${BASE_URL}/asr/transcribe`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, Accept: 'text/plain' },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Transcribe ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return (await res.text()).trim();
+}
+
+// Muse Image: edit the customer's own photo into an "after" preview. Returns a data URL or null.
+export async function museImageEdit({ dataUrl, prompt }) {
+  const res = await fetch(`${BASE_URL}/images/edits`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'muse-image-1.0', prompt, images: [{ image_url: dataUrl }], n: 1, output_format: 'jpeg' }),
+  });
+  if (!res.ok) throw new Error(`Muse Image ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const body = await res.json();
+  const item = body.data?.[0];
+  if (!item) return null;
+  if (item.b64_json) return `data:image/${body.output_format || 'jpeg'};base64,${item.b64_json}`;
+  return item.url || null;
+}
+
+// Live calls: open a realtime transcription session for one caller. The key stays on the server;
+// the browser streams 24 kHz 16-bit mono PCM to us and we relay it.
+export async function openRealtimeTranscription({ onEvent, onClose, mode = 'ENDPOINTING' }) {
+  const { default: WebSocket } = await import('ws');
+  const url = `${BASE_URL.replace(/^http/, 'ws')}/asr/realtime?sessionId=fa-${Date.now()}`;
+  const ws = new WebSocket(url);
+  await new Promise((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+  ws.send(JSON.stringify({
+    authorization: { accessToken: `Bearer ${process.env.MODEL_API_KEY}` },
+    audioEncoding: 'PCM_24KHZ',
+    model: TRANSCRIBE,
+    mode,
+  }));
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) return;
+    let ev;
+    try {
+      ev = JSON.parse(data.toString());
+    } catch {
+      return;
+    }
+    onEvent(ev);
+  });
+  ws.on('close', (code, reason) => onClose?.(code, reason?.toString()));
+  ws.on('error', () => {});
+  return {
+    sendAudio: (buf) => ws.readyState === 1 && ws.send(buf),
+    end: () => ws.readyState === 1 && ws.send(JSON.stringify({ type: 'endStream' })),
+    close: () => ws.close(),
+  };
+}
