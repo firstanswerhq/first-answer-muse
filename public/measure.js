@@ -1,4 +1,4 @@
-// Measure Anything: text one photo, get a measurement back.
+// First Answer Sight ("See it. Size it. Solve it."): text one photo, get a measurement back.
 // Muse Spark reads the photo, SAM 3.1 outlines the objects, our math turns
 // pixels into inches using an everyday object in the shot as the ruler.
 

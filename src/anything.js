@@ -1,4 +1,4 @@
-// Measure anything: one photo and one line of text in, an exact answer out.
+// First Answer Sight ("See it. Size it. Solve it."): one photo and one line of text in, an exact answer out.
 //
 //   1. Muse Spark reads the photo and the message: what is being asked (shoe size? will it fit?
 //      repair or replace?), what to measure, and which everyday ruler is in the shot.
