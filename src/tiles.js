@@ -9,6 +9,14 @@
 //    walls get the same, wide-as-possible cut (pros aim for at least half a tile).
 
 const r8 = (x) => Math.round(x * 16) / 16; // to the nearest 1/16 inch, how cuts are marked
+// 11.9375 -> "11 15/16": how a tape measure reads.
+export function inchFrac(x) {
+  const sixteenths = Math.round(x * 16);
+  const whole = Math.floor(sixteenths / 16);
+  let n = sixteenths - whole * 16, d = 16;
+  while (n && n % 2 === 0) { n /= 2; d /= 2; }
+  return n ? (whole ? `${whole} ${n}/${d}` : `${n}/${d}`) : `${whole}`;
+}
 
 // One direction (across the width or along the length): how many full tiles, and the two edge cuts.
 export function axisLayout(room, tile, joint) {
@@ -37,9 +45,9 @@ export function plan({ roomW, roomL, tileW, tileL, joint = 0.125, pattern = 'str
   const edgesY = along.edge > 0 ? 2 : 0;
 
   const cuts = [];
-  if (edgesX) cuts.push({ what: `edge pieces along the two side walls`, count: 2 * along.full, size: `${across.edge} x ${tileL} in`, cut: `cut each tile to ${across.edge} in wide (trim ${r8(tileW - across.edge)} in)` });
-  if (edgesY) cuts.push({ what: `edge pieces along the two end walls`, count: 2 * across.full, size: `${tileW} x ${along.edge} in`, cut: `cut each tile to ${along.edge} in long (trim ${r8(tileL - along.edge)} in)` });
-  if (edgesX && edgesY) cuts.push({ what: 'corner pieces', count: 4, size: `${across.edge} x ${along.edge} in`, cut: 'two cuts each' });
+  if (edgesX) cuts.push({ what: `edge pieces along the two side walls`, count: 2 * along.full, size: `${inchFrac(across.edge)} x ${inchFrac(tileL)} in`, cut: `cut each tile to ${inchFrac(across.edge)} in wide (trim ${inchFrac(tileW - across.edge)} in)` });
+  if (edgesY) cuts.push({ what: `edge pieces along the two end walls`, count: 2 * across.full, size: `${inchFrac(tileW)} x ${inchFrac(along.edge)} in`, cut: `cut each tile to ${inchFrac(along.edge)} in long (trim ${inchFrac(tileL - along.edge)} in)` });
+  if (edgesX && edgesY) cuts.push({ what: 'corner pieces', count: 4, size: `${inchFrac(across.edge)} x ${inchFrac(along.edge)} in`, cut: 'two cuts each' });
 
   const fullTiles = across.full * along.full;
   const cutTiles = cuts.reduce((t, c) => t + c.count, 0); // one tile per cut piece (offcuts are usually too small to reuse)
@@ -64,8 +72,8 @@ export function plan({ roomW, roomL, tileW, tileL, joint = 0.125, pattern = 'str
     room: { widthIn: roomW, lengthIn: roomL, sqft: Math.round(((roomW * roomL) / 144) * 10) / 10 },
     tile: { widthIn: tileW, lengthIn: tileL, jointIn: joint },
     layout: {
-      across: `${across.full} full tiles${edgesX ? ` + a ${across.edge} in cut at each side wall` : ''}`,
-      along: `${along.full} full tiles${edgesY ? ` + a ${along.edge} in cut at each end wall` : ''}`,
+      across: `${across.full} full tiles${edgesX ? ` + a ${inchFrac(across.edge)} in cut at each side wall` : ''}`,
+      along: `${along.full} full tiles${edgesY ? ` + a ${inchFrac(along.edge)} in cut at each end wall` : ''}`,
       start: 'start at the center of the room and work out, so both walls get the same cut',
     },
     fullTiles,

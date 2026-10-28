@@ -84,7 +84,7 @@ export function parseSam(text) {
     let mask = null;
     const dm = m[3] && m[3].match(/data=(\d+),(\d+),([~!])(.*)$/);
     if (dm) mask = { height: +dm[1], width: +dm[2], encoding: dm[3] === '~' ? 'lossless' : 'one_bit', payload: dm[3] + dm[4] };
-    objects.push({ id: +m[1], box, c: kv.c !== undefined ? +kv.c : null, areaShare: ((box.x2 - box.x1) * (box.y2 - box.y1)) / (+kv.w * +kv.h), mask });
+    objects.push({ id: +m[1], box, c: kv.c !== undefined ? +kv.c : null, areaShare: ((box.x2 - box.x1) * (box.y2 - box.y1)) / (+kv.w * +kv.h), mask, frame: { w: +kv.w, h: +kv.h } });
   }
   return { objects, frame };
 }

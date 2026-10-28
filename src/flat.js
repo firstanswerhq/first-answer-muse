@@ -28,6 +28,7 @@ export const FLAT_REFERENCES = {
 };
 
 const MM_PER_IN = 25.4;
+const frameOf = (o) => o?.frame || null;
 
 // Pixel centers of a SAM object's mask, in photo pixels. Thinned to at most ~maxPts points
 // (each point then stands for `weight` pixels) so big masks stay fast.
@@ -220,6 +221,27 @@ function feret(points) {
   return { length: best, pair };
 }
 
+// The smallest rectangle around a set of points (a room's floor, a rug): its long and short side.
+// One side of the best rectangle always lies along a hull edge, so try each edge's direction.
+export function minRect(points) {
+  const hull = convexHull(points);
+  let bestR = null;
+  for (let i = 0; i < hull.length; i++) {
+    const [x1, y1] = hull[i], [x2, y2] = hull[(i + 1) % hull.length];
+    const L = Math.hypot(x2 - x1, y2 - y1);
+    if (L < 1e-9) continue;
+    const ux = (x2 - x1) / L, uy = (y2 - y1) / L;
+    let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+    for (const [x, y] of hull) {
+      const a = x * ux + y * uy, b = -x * uy + y * ux;
+      if (a < a0) a0 = a; if (a > a1) a1 = a; if (b < b0) b0 = b; if (b > b1) b1 = b;
+    }
+    const area = (a1 - a0) * (b1 - b0);
+    if (!bestR || area < bestR.area) bestR = { area, long: Math.max(a1 - a0, b1 - b0), short: Math.min(a1 - a0, b1 - b0) };
+  }
+  return bestR;
+}
+
 // ---------- the two rulers ----------
 
 // From a rectangle ruler: map from photo pixels to millimeters on the ruler's plane.
@@ -285,6 +307,9 @@ export function measureFlat({ target, ref, refKind }) {
   for (const p of tm.pts) area += map.areaScale(p) * tm.weight * tm.pixelArea;
   const mm = tm.pts.map(map.toMm);
   const { length } = feret(mm);
+  const rect = minRect(mm);
+  const fr = frameOf(target);
+  const clipped = Boolean(fr) && (target.box.x1 <= 1 || target.box.y1 <= 1 || target.box.x2 >= fr.w - 2 || target.box.y2 >= fr.h - 2);
   const width = length > 0 ? area / length : 0;
 
   const notes = [];
@@ -302,6 +327,7 @@ export function measureFlat({ target, ref, refKind }) {
       notes.push('for something this big, lay a sheet of paper or a gift card next to it instead of a coin');
     }
   }
+  if (clipped) { confidence = 'low'; notes.push('part of it runs off the edge of the photo; step back so all of it is in the shot'); }
   if (refKind === 'soda_can') notes.push('measured at the can\'s distance; best for things standing beside it');
 
   const r1 = (x) => Math.round(x * 10) / 10;
@@ -312,6 +338,9 @@ export function measureFlat({ target, ref, refKind }) {
     lengthMm: r1(length),
     widthMm: r1(width),
     lengthIn: r1(length / MM_PER_IN),
+    rectLengthMm: rect ? r1(rect.long) : null,
+    rectWidthMm: rect ? r1(rect.short) : null,
+    clipped,
     widthIn: r1(width / MM_PER_IN),
     ruler: R.label,
     method: R.shape === 'circle' ? 'coin oval, tilt undone' : 'four-corner perspective map',

@@ -13,6 +13,9 @@ import { business } from './business.js';
 import * as engine from './engine.js';
 import { handleMessage, addNote, getThread } from './agent.js';
 import { quoteFromPhoto, photoReply } from './photo.js';
+import { measureAnything } from './anything.js';
+import { readExif } from './distance.js';
+import fs from 'node:fs';
 import { hasKey, transcribeWav, openRealtimeTranscription, SPARK, BASE_URL, DIRECT_URL, RELAY_URL, relayHeaders } from './muse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -136,6 +139,32 @@ app.post('/api/photo', safe(async (req, res) => {
   broadcast('photo', { threadId, leadId: t.ctx.leadId, read: r.read, count: r.count, measure: r.measure, quote: r.quote, hasAfter: Boolean(r.after) });
   res.json({ reply, after: r.after, boxes: r.boxes, frame: r.frame, count: r.count, measure: r.measure, outline: r.outline, steps: r.steps.map((s) => ({ model: s.model, step: s.step, failed: Boolean(s.error) })) });
 }));
+
+// ---- measure anything: one photo + one line of text ----
+app.post('/api/measure', safe(async (req, res) => {
+  const { dataUrl, text = '', exifB64 = '' } = req.body || {};
+  if (!/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ ok: false, ask: 'Send a PNG, JPEG or WebP photo.' });
+  let focal35 = null;
+  try { if (exifB64) focal35 = readExif(Buffer.from(exifB64, 'base64')).focal35 || null; } catch {}
+  const r = await measureAnything({ dataUrl, text: String(text).slice(0, 500), focal35 });
+  broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
+  res.json({ ...r, pipeline: r.pipeline.map((s) => ({ model: s.model, step: s.step, failed: Boolean(s.error) })), lens: focal35 ? 'from photo' : 'typical phone' });
+}));
+
+// Sample photos for the demo chips (public/samples/*.jpg with a matching .txt message), if present.
+app.get('/api/measure/samples', (req, res) => {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'samples');
+  try {
+    const out = fs.readdirSync(dir).filter((f) => /\.(jpe?g|png)$/i.test(f)).map((f) => {
+      const id = f.replace(/\.\w+$/, '');
+      const txtFile = path.join(dir, `${id}.txt`);
+      const [label, ...rest] = (fs.existsSync(txtFile) ? fs.readFileSync(txtFile, 'utf8') : id).split('\n');
+      const mime = /png$/i.test(f) ? 'image/png' : 'image/jpeg';
+      return { id, label: label.trim(), text: rest.join('\n').trim(), dataUrl: `data:${mime};base64,${fs.readFileSync(path.join(dir, f)).toString('base64')}` };
+    });
+    res.json(out);
+  } catch { res.json([]); }
+});
 
 // ---- voicemail ----
 const DEMO_VOICEMAIL = "Hi, this is Marcus over on Belmont Boulevard. I've got a two-car driveway that's covered in oil stains and I want it pressure washed before my daughter's party on the fifteenth. Call or text me back. Thanks.";
