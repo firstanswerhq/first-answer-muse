@@ -240,6 +240,17 @@ test('review B: covered card end, brows only, second face, narrow eyes', () => {
 });
 
 test('review B routing', () => {
-  for (const t of ['pupillary distance', 'what is my IPD', 'eye distance please', 'distance between eyes', "measure my kid's eyes"]) assert.equal(guessFromText(t).task, 'face', t);
-  for (const t of ['is this shelf symmetrical', 'size my face mask', 'face shield size', 'my eye bolt', 'forehead thermometer', 'PD said the road is closed']) assert.notEqual(guessFromText(t).task, 'face', t);
+  for (const t of ['how wide is my nose', 'face symmetry', 'PD measurement', 'pupillary distance', 'what is my IPD', 'eye distance please', 'distance between eyes', "measure my kid's eyes"]) assert.equal(guessFromText(t).task, 'face', t);
+  for (const t of ['is this shelf symmetrical', 'size my face mask', 'face shield size', 'my eye bolt', 'forehead thermometer', 'PD said the road is closed', 'the shelf at my eye level', 'my face frame cabinet', 'eye distance from monitor']) assert.notEqual(guessFromText(t).task, 'face', t);
+});
+
+test('review C: head nodded 10° up close is never a confident wrong number; real noses are not refused', () => {
+  for (const pitchDeg of [-10, 10]) for (const D of [250, 300]) {
+    const f = run({ D, pitchDeg }, { card: { u: 0, v: 65, a: 42.8, b: 26.99, shape: 'rect', d: 0 } });
+    if (f.ok && f.confidence === 'good') near(f.numbers.eyeCenterDistanceMm, 63, 0.05, `pitch ${pitchDeg} at ${D}`);
+  }
+  for (const v of [-25, -40]) {
+    const f = run({}, { nose: [{ u: 0, v, a: 17, b: 12, d: -5 }] });
+    assert.equal(f.ok, true, `nose at ${v}: ${f.ask}`);
+  }
 });

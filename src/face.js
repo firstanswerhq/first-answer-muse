@@ -113,6 +113,8 @@ export function cardGeometry(card) {
     aspect: longPx / ((s1 + s2) / 2),
     turnRatio: Math.max(s1, s2) / Math.min(s1, s2),
     tipRatio: Math.max(l1, l2) / Math.min(l1, l2),
+    // The two long edges with their midpoints, so the caller can tell which one is the top.
+    longEdges: (longFirst ? [[0, 1], [2, 3]] : [[1, 2], [3, 0]]).map(([i, j]) => ({ len: len(sub(c[j], c[i])), mid: [(c[i][0] + c[j][0]) / 2, (c[i][1] + c[j][1]) / 2] })),
     cornerGapMm,
     edgeCover: total ? inside / total : 1,
   };
@@ -150,7 +152,7 @@ export function pickEyes(candidates, g, kEye = 1) {
     const angle = Math.acos(Math.min(1, Math.abs(dotp(unit(v), g.longDir))));
     const level = Math.abs(a.off - b.off);
     const ratio = sep / wAvg;
-    if (Math.abs(a.w - b.w) / wAvg > 0.2 || level > 0.2 * sep || awayFromCard(a, b) > 35 || angle > 25 * DEG || ratio < 1.6 || ratio > 2.8) continue;
+    if (Math.abs(a.w - b.w) / wAvg > 0.2 || level > 0.2 * sep || awayFromCard(a, b) > 40 || angle > 25 * DEG || ratio < 1.6 || ratio > 2.8) continue;
     const score = Math.abs(ratio - 2.1) + Math.abs(a.w - b.w) / wAvg + level / sep;
     if (!best || score < best.score) best = { a, b, score, angleDeg: angle / DEG };
   }
@@ -187,7 +189,8 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   const yawSigma = D ? Math.asin(Math.min(1, ((1.5 / g.shortPx) * D) / CARD.long)) / DEG : null;
   const tipDeg = D ? Math.asin(Math.min(1, ((g.tipRatio - 1) * D) / CARD.short)) / DEG : null;
   // An end of the card hidden by hair (a straight cut) shortens it without leaving a corner gap.
-  if (yawDeg != null && g.aspect < want * Math.cos(yawDeg * DEG) * 0.97) return { ok: false, ask: 'An end of the card looks covered or cut off. ' + CARD_ASK, card: g };
+  if (yawDeg != null && g.aspect < want * Math.cos(yawDeg * DEG) * 0.95) return { ok: false, ask: 'An end of the card looks covered or cut off. ' + CARD_ASK, card: g };
+  const endMaybeCovered = yawDeg != null && g.aspect < want * Math.cos(yawDeg * DEG) * 0.98;
   if (yawDeg != null && yawDeg > 20) return { ok: false, ask: 'Face the camera straight on and send one more.' };
 
   const pair = pickEyes(eyes, g, k(DEPTH.eye));
@@ -197,7 +200,19 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   const s = g.mmPerPx;
   const eyeVec = sub(pair.b.px, pair.a.px);
   const ue = unit(eyeVec); // the face's own horizontal
-  const ipd = len(eyeVec) * s * k(DEPTH.eye);
+  // The card sits hMm above the eyes. Tilt of the card is forehead slope (top leans back) plus any nod
+  // of the head; a nod moves the eyes nearer or farther than the card. If the card's top edge is the
+  // nearer one, the tilt can only be a nod, so correct for it; if the top leans back, slope and nod can't be
+  // told apart from one photo, so that part is carried as uncertainty instead.
+  const eyeMid = [(pair.a.px[0] + pair.b.px[0]) / 2, (pair.a.px[1] + pair.b.px[1]) / 2];
+  const hMm = Math.abs(dotp(sub(g.center, eyeMid), [-ue[1], ue[0]])) * s;
+  const [e1, e2] = g.longEdges;
+  const topE = len(sub(e1.mid, eyeMid)) > len(sub(e2.mid, eyeMid)) ? e1 : e2;
+  const topNearer = topE.len > (topE === e1 ? e2 : e1).len;
+  const tiltShift = tipDeg == null ? 0 : hMm * Math.sin(tipDeg * DEG); // mm
+  const eyeD = DEPTH.eye + (topNearer ? tiltShift : 0);
+  const kE = k(eyeD) / k(DEPTH.eye); // pickEyes sized the eyes at the plain depth
+  const ipd = len(eyeVec) * s * k(eyeD);
   if (ipd < 45 || ipd > 80) return { ok: false, ask: 'The sizes came out unusual. Make sure it’s a standard gift card flat on your forehead, and send one more.' };
   const widthOf = (obj, d) => {
     if (!obj) return null;
@@ -209,23 +224,27 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   // eye spacing on real faces, eyebrows push it well past that.
   let browRisk = false;
   if (noseF) {
-    const drop = Math.abs(dotp(sub(noseF.c, pair.a.px), [-ue[1], ue[0]])) / len(eyeVec);
-    if (drop > 0.75) return { ok: false, ask: 'I couldn’t find both eyes clearly. Face the camera straight on in good light and send one more.' };
-    browRisk = drop > 0.6;
+    const drop = Math.abs(dotp(sub(noseF.c, pair.a.px), [-ue[1], ue[0]])) * s * k(DEPTH.eye); // mm below the eye line
+    if (drop > 50) return { ok: false, ask: 'I couldn’t find both eyes clearly. Face the camera straight on in good light and send one more.' };
+    browRisk = drop > 42;
   }
   const numbers = {
     eyeCenterDistanceMm: mm0(ipd),
-    leftEyeWidthMm: mm0(pair.a.w),
-    rightEyeWidthMm: mm0(pair.b.w),
+    leftEyeWidthMm: mm0(pair.a.w * kE),
+    rightEyeWidthMm: mm0(pair.b.w * kE),
     noseWidthMm: noseF ? mm0(noseF.w) : null,
     mouthWidthMm: mouthF ? mm0(mouthF.w) : null,
   };
 
   const fixes = [];
   let confidence = 'good';
-  if (yawDeg != null && yawDeg - yawSigma > 6) { confidence = 'low'; fixes.push('Your head looks turned or tilted a little: face the camera straight on and send one more.'); }
+  if (yawDeg != null && yawDeg > 6) { confidence = 'low'; fixes.push('Your head looks turned or tilted a little: face the camera straight on and send one more.'); }
   if (browRisk || pair.a.w > 34 || pair.b.w > 34) { confidence = 'low'; fixes.push('The eyes may have been mixed up with the eyebrows: face the camera in good, even light and send one more.'); }
-  if (tipDeg != null && tipDeg > 30) { confidence = 'low'; fixes.push('Hold the phone at eye height; the card looks tilted.'); }
+  if (tipDeg != null && tipDeg > 20) { confidence = 'low'; fixes.push('Hold the phone at eye height, straight in front of your face; the card looks tilted.'); }
+  if (endMaybeCovered) { confidence = 'low'; fixes.push('An end of the card may be covered (hair?): keep the whole card in view and send one more.'); }
+  // Up close, an unseen nod of the head (about 10°) moves the eyes enough against the card to matter;
+  // from 30 cm out it stays inside the ±5% we promise.
+  if (D && D < 300) { confidence = 'low'; fixes.push('Hold the phone a little farther away, about a foot or more, straight in front of your face, and send one more.'); }
   if (!D) fixes.push('Phone distance unknown, so depth correction was skipped.');
 
   // Left-right comparison only from a straight-on photo with the nose in view; small differences are
