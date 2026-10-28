@@ -27,6 +27,10 @@ export const business = {
         medium: { label: '2-car driveway', price: 189, hours: 2 },
         large: { label: '3-car or long driveway', price: 259, hours: 3 },
       },
+      // When a photo is measured (garage door as the ruler), price by the square foot instead of the size tier.
+      perSqft: 0.35,
+      sqftMinimum: 139,
+      sqftPerHour: 400,
       samConcept: 'driveway',
       note: 'Oil stains pre-treated; deep stains may fade but not vanish.',
     },

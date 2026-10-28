@@ -30,6 +30,7 @@ function step(model, text) {
   const li = document.createElement('li');
   li.innerHTML = `<span class="tag t-${model.replace(/[^a-z]/gi, '')}">${esc(MODEL_LABEL[model] || model)}</span> ${esc(text)}`;
   steps.prepend(li);
+  return li;
 }
 
 const TOOL_TEXT = {
@@ -86,12 +87,28 @@ async function fileToDataUrl(file, max = 1280) {
   return c.toDataURL('image/jpeg', 0.86);
 }
 
-function drawBoxes(wrap, boxes, frame) {
-  if (!boxes?.length || !frame) return;
+function drawBoxes(wrap, boxes, frame, outline, measure) {
+  if ((!boxes?.length && !outline) || !frame) return;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', `0 0 ${frame.w} ${frame.h}`);
   svg.classList.add('boxes');
-  boxes.forEach((b, i) => {
+  if (outline?.path) {
+    // SAM's driveway outline, from mask pixels to photo pixels.
+    const b = outline.box;
+    const g = document.createElementNS(svg.namespaceURI, 'path');
+    g.setAttribute('d', outline.path);
+    g.setAttribute('transform', `translate(${b.x1} ${b.y1}) scale(${(b.x2 - b.x1 + 1) / outline.w} ${(b.y2 - b.y1 + 1) / outline.h})`);
+    g.setAttribute('vector-effect', 'non-scaling-stroke');
+    g.classList.add('area');
+    svg.appendChild(g);
+  }
+  if (measure) {
+    const tag = document.createElement('span');
+    tag.className = 'measure';
+    tag.textContent = `≈ ${measure.sqft.toLocaleString()} sq ft · ${measure.widthFt} × ${measure.lengthFt} ft`;
+    wrap.appendChild(tag);
+  }
+  (boxes || []).forEach((b, i) => {
     const r = document.createElementNS(svg.namespaceURI, 'rect');
     Object.entries({ x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1 }).forEach(([k, v]) => r.setAttribute(k, v));
     r.style.animationDelay = `${i * 60}ms`;
@@ -103,19 +120,21 @@ function drawBoxes(wrap, boxes, frame) {
 async function sendPhoto(dataUrl) {
   const me = bubble('me', `<div class="pic"><img src="${dataUrl}" alt="Photo sent"></div>`, 'photo');
   const t = typing();
-  step('muse-spark-1.3', 'reading the photo...');
+  const pending = step('muse-spark-1.3', 'reading the photo...');
   try {
     const r = await post('/api/photo', { threadId, dataUrl, phone });
     t.remove();
-    drawBoxes(me.querySelector('.pic'), r.boxes, r.frame);
+    pending.remove();
+    drawBoxes(me.querySelector('.pic'), r.boxes, r.frame, r.outline, r.measure);
     for (const s of (r.steps || []).slice().reverse()) {
-      const txt = { 'read photo': 'read the photo: what job, what size', 'count windows': `counted ${r.count} windows (one box each)`, 'price from list': 'priced it from the price list', 'after preview': 'painted the "after" picture from their photo' }[s.step] || s.step;
-      step(s.model, txt);
+      const txt = { 'read photo': 'read the photo: what job, what size', 'count windows': `counted ${r.count} windows (one box each)`, 'price from list': 'priced it from the price list', 'after preview': 'painted the "after" picture from their photo', 'measure driveway': r.measure ? `outlined the driveway and the garage door; door = ${r.measure.reference.match(/\d+ ft/)[0]} ruler → ${r.measure.sqft} sq ft` : 'tried to measure the driveway' }[s.step] || s.step;
+      step(s.model, s.failed ? `${s.step}: skipped this time` : txt);
     }
     bubble('them', esc(r.reply));
     if (r.after) bubble('them', `<div class="pic after"><img src="${r.after}" alt="How it will look after cleaning"><span class="label">After, by Muse Image</span></div>`, 'photo');
   } catch (e) {
     t.remove();
+    pending.remove();
     bubble('them', esc(e.message), 'err');
   }
 }

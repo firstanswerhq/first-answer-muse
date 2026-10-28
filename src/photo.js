@@ -1,18 +1,23 @@
 // Photo-to-quote. A customer texts a picture of the job:
 //   1. Muse Spark reads the photo: which service, what size, anything unusual.
 //   2. SAM 3.1 counts the windows (one box per window) so the quote is a count, not a guess.
+//      For a driveway, SAM outlines the driveway and the garage door; the door (16 ft or 9 ft wide, 7 ft tall)
+//      is the ruler, and measure.js turns the outline into square feet.
 //   3. The engine prices it from the real price list.
 //   4. Muse Image renders an "after" picture of the same house, cleaned, to send with the quote.
 
 import { business } from './business.js';
 import * as engine from './engine.js';
 import { hasKey, sparkReadPhoto, samSegment, museImageEdit } from './muse.js';
+import { measureSurface, garageDoorKind, best } from './measure.js';
+import { decodeMaskToSVGPath } from '@meta-sam/parser';
 
 const READ_PROMPT = `You look at photos texted to ${business.name}, an exterior cleaning company (window cleaning, driveway pressure washing, gutter cleaning).
 Return JSON only. service: the best-matching service, or "none" if the photo shows none of them.
 driveway_tier: small (1 car), medium (2 cars), large (3+ cars or long) when a driveway is shown, else "unknown".
 stories: 1, 2 or 3 for the visible house, or 0 if no house.
 windows_estimate: your rough count of exterior windows visible, 0 if none.
+garage_door: "double" if a two-car garage door is visible, "single" if only one-car doors, "none" if no garage door.
 notes: one short sentence a crew lead would want to know (heavy stains, tall second story, steep roof, moss), plain words.
 summary: one short sentence describing the job for the owner.`;
 
@@ -23,10 +28,11 @@ const READ_SCHEMA = {
     driveway_tier: { type: 'string', enum: ['small', 'medium', 'large', 'unknown'] },
     stories: { type: 'integer' },
     windows_estimate: { type: 'integer' },
+    garage_door: { type: 'string', enum: ['double', 'single', 'none'] },
     notes: { type: 'string' },
     summary: { type: 'string' },
   },
-  required: ['service', 'driveway_tier', 'stories', 'windows_estimate', 'notes', 'summary'],
+  required: ['service', 'driveway_tier', 'stories', 'windows_estimate', 'garage_door', 'notes', 'summary'],
   additionalProperties: false,
 };
 
@@ -58,7 +64,7 @@ export async function quoteFromPhoto({ dataUrl, hint = '', wantAfter = true, dem
   else if (/gutter/i.test(hint)) service = 'gutters';
   if (service === 'none') return { ok: false, read, steps, reason: 'no matching service in photo' };
 
-  let q, args, count = null, boxes = [], frame = null;
+  let q, args, count = null, boxes = [], frame = null, measure = null, outline = null;
   if (service === 'windows') {
     if (hasKey()) {
       const seg = await samSegment({ dataUrl, concept: 'window' });
@@ -71,8 +77,25 @@ export async function quoteFromPhoto({ dataUrl, hint = '', wantAfter = true, dem
     args = { service, count };
     q = engine.quote(args);
   } else if (service === 'driveway') {
-    if (read.driveway_tier === 'unknown') return { ok: false, read, steps, reason: 'driveway size unclear' };
-    args = { service, tier: read.driveway_tier };
+    let measured = null;
+    if (hasKey() && read.garage_door !== 'none') {
+      try {
+        measured = await measureDriveway(dataUrl, steps);
+      } catch (e) {
+        steps.push({ model: 'sam-3.1', step: 'measure driveway', error: String(e.message).slice(0, 200) });
+      }
+    }
+    if (measured?.m.ok && measured.m.confidence === 'good') {
+      args = { service, sqft: measured.m.sqft };
+      measure = measured.m;
+      outline = measured.outline;
+      ({ frame } = measured);
+      boxes = [measured.doorBox];
+    } else if (read.driveway_tier !== 'unknown') {
+      args = { service, tier: read.driveway_tier };
+    } else {
+      return { ok: false, read, steps, reason: measured ? 'driveway angle' : 'driveway size unclear' };
+    }
     q = engine.quote(args);
   } else {
     const tier = TIER_BY_STORIES[read.stories];
@@ -95,7 +118,28 @@ export async function quoteFromPhoto({ dataUrl, hint = '', wantAfter = true, dem
     }
   }
 
-  return { ok: q.ok, service, args, read, count, boxes, frame, quote: q, after, steps };
+  return { ok: q.ok, service, args, read, count, boxes, frame, measure, outline, quote: q, after, steps };
+}
+
+// SAM outlines the driveway and the garage door (two calls at once), then measure.js does the math.
+async function measureDriveway(dataUrl, steps) {
+  const [drive, doors] = await Promise.all([samSegment({ dataUrl, concept: 'driveway' }), samSegment({ dataUrl, concept: 'garage door' })]);
+  const surface = best(drive.objects), door = best(doors.objects);
+  if (!surface || !door) {
+    steps.push({ model: 'sam-3.1', step: 'measure driveway', result: { driveway: Boolean(surface), garageDoor: Boolean(door) } });
+    return null;
+  }
+  const refKind = garageDoorKind(door.box);
+  const frame = drive.frame || doors.frame;
+  const m = measureSurface({ surface, ref: door, refKind, frame });
+  steps.push({ model: 'sam-3.1', step: 'measure driveway', result: m });
+  let outline = null;
+  if (surface.mask) {
+    try {
+      outline = { path: decodeMaskToSVGPath(surface.mask), box: surface.box, w: surface.mask.width, h: surface.mask.height };
+    } catch {}
+  }
+  return { m, outline, frame, doorBox: door.box };
 }
 
 function afterPrompt(service) {
@@ -111,11 +155,16 @@ function afterPrompt(service) {
 export function photoReply(r) {
   if (!r.ok) {
     if (r.reason === 'driveway size unclear') return 'Thanks for the photo! Is that a 1-car, 2-car or 3-car driveway?';
+    if (r.reason === 'driveway angle') return 'Thanks! To measure it from a photo, stand at the street end of the driveway facing the garage, with the whole garage door in the shot, and send one more. Or just tell me: 1-car, 2-car or 3-car?';
     if (r.reason === 'stories unclear') return 'Thanks for the photo! Is the house one, two or three stories?';
     if (r.reason === 'could not count windows') return 'Thanks! I could not count the windows from that one. How many windows would you like cleaned?';
     return `Thanks for the photo! We do window cleaning, driveway pressure washing and gutter cleaning. Which one are you after?`;
   }
   const q = r.quote;
-  const counted = r.service === 'windows' ? `I count ${r.count} windows on the front. ` : '';
-  return `${counted}${q.serviceName}: ${q.detail}, $${q.total} total, about ${q.hours} hour${q.hours > 1 ? 's' : ''}. No deposit needed.${r.after ? ' Here is how it will look when we are done.' : ''} Want to see open times?`;
+  const counted = r.service === 'windows'
+    ? `I count ${r.count} windows on the front. `
+    : r.measure
+      ? `Using your ${r.measure.reference.split(' (')[0]} as a ruler, the driveway measures about ${r.measure.widthFt} by ${r.measure.lengthFt} ft. `
+      : '';
+  return `${counted}${q.serviceName}: ${q.detail}, $${q.total} total, about ${q.hours} hour${q.hours > 1 ? 's' : ''}. No deposit needed.${r.measure ? ' The crew double-checks the size when they arrive, and nothing changes without your OK.' : ''}${r.after ? ' Here is how it will look when we are done.' : ''} Want to see open times?`;
 }

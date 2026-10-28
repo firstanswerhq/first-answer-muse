@@ -12,6 +12,7 @@ The demo business is **Brightside Exterior Care**, a window cleaning, pressure w
 | --- | --- | --- |
 | **Texts** "how much for my windows?" | The agent asks for a count or a photo, quotes from the price list, offers real open times, books it | **Muse Spark 1.3** with tool calling |
 | **Texts a photo** of their house | Muse Spark reads the photo (which job, how big, anything the crew should know). SAM 3.1 finds every window and the quote is a real count, not a guess. Muse Image sends back an "after" picture of *their* house, cleaned | **Muse Spark** vision + **SAM 3.1** + **Muse Image** |
+| **Texts a photo of the driveway** | SAM 3.1 outlines the driveway and the garage door. The door is the ruler: a double door is 16 ft wide and 7 ft tall. From the door's size and where the driveway's edges meet on the horizon, the app works out the true scale on every row of the ground and adds up the square feet, then prices by the square foot. If the angle is too steep to trust, it asks for a straight-on photo instead of guessing | **SAM 3.1** masks + **Muse Spark** vision |
 | **Leaves a voicemail** at 2 AM | Transcribed, understood, and texted back with a quote and open times within seconds | **Muse Voice Transcribe** + **Muse Spark** |
 | **Calls** | Live captions as they talk; every finished sentence goes to the agent, which answers out loud | **Muse Voice Transcribe** realtime + **Muse Spark** |
 
@@ -36,7 +37,8 @@ Without a key, a small scripted brain calls the same tools so the text, photo an
 
 - `src/muse.js`: Meta Model API client (base URL `https://api.meta.ai/v1`). Chat Completions with tools and JSON-schema output for Muse Spark; the Responses API for SAM 3.1; `/images/edits` for Muse Image; `/asr/transcribe` and the realtime WebSocket for Muse Voice Transcribe.
 - `src/agent.js`: the front-desk agent loop and its tools.
-- `src/photo.js`: photo to quote (read, count, price, after picture).
+- `src/photo.js`: photo to quote (read, count or measure, price, after picture).
+- `src/measure.js`: measures a flat surface from one object of known size (garage door, front door). Decodes SAM masks with `@meta-sam/parser`, finds the horizon from the surface's long edges, sums real square feet row by row, and marks the result low-confidence when the geometry doesn't check out. Same engine works for patios, walkways and pool decks. Tested against rendered scenes with known answers (`test/measure.test.js`).
 - `src/engine.js`: price list, calendar and bookings in the business's own time zone.
 - `src/server.js`: Express API, owner live feed (server-sent events), live-call relay (WebSocket; the API key never reaches the browser).
 - `public/`: the customer phone and the owner board. The browser records 24 kHz 16-bit PCM itself, the format Muse Voice Transcribe takes.

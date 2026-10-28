@@ -116,7 +116,7 @@ app.post('/api/photo', safe(async (req, res) => {
   const reply = photoReply(r);
   // Tell the agent what the photo showed, so the conversation continues from here.
   const facts = r.ok
-    ? `[PHOTO] Customer sent a photo. Read: ${r.read.summary} Service: ${r.service}. ${r.service === 'windows' ? `SAM counted ${r.count} windows. ` : ''}quote_job args: ${JSON.stringify(r.args)}. Quote: ${r.quote.detail}, $${r.quote.total}, ${r.quote.hours} h. Crew note: ${r.read.notes}`
+    ? `[PHOTO] Customer sent a photo. Read: ${r.read.summary} Service: ${r.service}. ${r.service === 'windows' ? `SAM counted ${r.count} windows. ` : ''}${r.measure ? `Measured with SAM against the ${r.measure.reference}: about ${r.measure.sqft} sq ft (${r.measure.widthFt} x ${r.measure.lengthFt} ft). ` : ''}quote_job args: ${JSON.stringify(r.args)}. Quote: ${r.quote.detail}, $${r.quote.total}, ${r.quote.hours} h. Crew note: ${r.read.notes}`
     : `[PHOTO] Customer sent a photo; could not quote from it (${r.reason}). Read: ${r.read?.summary || 'n/a'}`;
   if (text) t.messages.push({ role: 'user', content: text });
   addNote(threadId, facts);
@@ -125,8 +125,8 @@ app.post('/api/photo', safe(async (req, res) => {
     // keep the scripted brain in step
     t.ctx.args = r.args;
   }
-  broadcast('photo', { threadId, leadId: t.ctx.leadId, read: r.read, count: r.count, quote: r.quote, hasAfter: Boolean(r.after) });
-  res.json({ reply, after: r.after, boxes: r.boxes, frame: r.frame, count: r.count, steps: r.steps.map((s) => ({ model: s.model, step: s.step })) });
+  broadcast('photo', { threadId, leadId: t.ctx.leadId, read: r.read, count: r.count, measure: r.measure, quote: r.quote, hasAfter: Boolean(r.after) });
+  res.json({ reply, after: r.after, boxes: r.boxes, frame: r.frame, count: r.count, measure: r.measure, outline: r.outline, steps: r.steps.map((s) => ({ model: s.model, step: s.step, failed: Boolean(s.error) })) });
 }));
 
 // ---- voicemail ----

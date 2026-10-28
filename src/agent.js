@@ -25,7 +25,7 @@ Rules:
 - Reply like a friendly person texting: 1 to 3 short sentences, no lists unless offering times, no emoji.
 - NEVER state a price, a total, a duration or an open time unless a tool returned it in this conversation. If you don't have it, call the tool.
 - To quote windows you need a window count: ask for a photo of the front of the house (we count the windows from it) or the number.
-- To quote driveway or gutters you need the size tier (1, 2 or 3-car driveway; one, two or three-story home).
+- To quote driveway or gutters you need the size tier (1, 2 or 3-car driveway; one, two or three-story home). If a [PHOTO] note gives a measured driveway area, quote with sqft instead and pass the same sqft to open_times and book_job.
 - After a quote, offer open times from open_times. To book you need: the time they pick, their name and the service address. Then call book_job.
 - When book_job succeeds, confirm the day, time, total and address in one message and say no deposit is needed.
 - If something is outside these services or the customer is upset, call hand_to_owner and tell them ${business.owner} will text back.
@@ -44,13 +44,14 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'quote_job',
-      description: 'Price a job from the real price list. windows needs count; driveway needs tier small|medium|large; gutters needs tier one|two|three.',
+      description: 'Price a job from the real price list. windows needs count; driveway needs tier small|medium|large, OR sqft when a [PHOTO] note gives a measured area; gutters needs tier one|two|three.',
       parameters: {
         type: 'object',
         properties: {
           service: { type: 'string', enum: ['windows', 'driveway', 'gutters'] },
           count: { type: 'integer', description: 'windows only: number of windows' },
           tier: { type: 'string', description: 'driveway: small|medium|large; gutters: one|two|three' },
+          sqft: { type: 'integer', description: 'driveway only: measured square feet from a [PHOTO] note' },
         },
         required: ['service'],
         additionalProperties: false,
@@ -68,6 +69,7 @@ export const TOOLS = [
           service: { type: 'string', enum: ['windows', 'driveway', 'gutters'] },
           count: { type: 'integer' },
           tier: { type: 'string' },
+          sqft: { type: 'integer' },
         },
         required: ['service'],
         additionalProperties: false,
@@ -86,6 +88,7 @@ export const TOOLS = [
           service: { type: 'string', enum: ['windows', 'driveway', 'gutters'] },
           count: { type: 'integer' },
           tier: { type: 'string' },
+          sqft: { type: 'integer' },
           customer: { type: 'string', description: "customer's name" },
           address: { type: 'string', description: 'service address' },
         },

@@ -23,9 +23,25 @@ const nextId = (p) => `${p}-${String(state.seq++).padStart(4, '0')}`;
 
 // ---------- quotes ----------
 
-export function quote({ service, count, tier }) {
+export function quote({ service, count, tier, sqft }) {
   const s = business.services[service];
   if (!s) return { ok: false, error: `Unknown service "${service}". Services: ${Object.keys(business.services).join(', ')}.` };
+  if (sqft != null && s.perSqft) {
+    const a = Math.round(Number(sqft) / 10) * 10;
+    if (!Number.isFinite(a) || a < 50 || a > 20000) return { ok: false, error: 'Need a measured area between 50 and 20,000 square feet.' };
+    const raw = Math.round(a * s.perSqft);
+    const total = Math.max(raw, s.sqftMinimum);
+    return {
+      ok: true,
+      service,
+      serviceName: s.name,
+      detail: `about ${a.toLocaleString('en-US')} sq ft at $${s.perSqft.toFixed(2)}/sq ft${total > raw ? ` (job minimum $${s.sqftMinimum})` : ''}`,
+      sqft: a,
+      total,
+      hours: Math.max(1, Math.ceil(a / s.sqftPerHour)),
+      note: s.note,
+    };
+  }
   if (s.tiers) {
     const t = s.tiers[tier];
     if (!t) return { ok: false, error: `For ${s.name} pick a size: ${Object.keys(s.tiers).join(', ')}.` };
@@ -103,8 +119,8 @@ export function openTimes({ hours = 1, limit = 4, now = new Date() } = {}) {
 
 // ---------- bookings and leads ----------
 
-export function book({ slot, service, count, tier, customer, phone, address, channel = 'text', now = new Date() }) {
-  const q = quote({ service, count, tier });
+export function book({ slot, service, count, tier, sqft, customer, phone, address, channel = 'text', now = new Date() }) {
+  const q = quote({ service, count, tier, sqft });
   if (!q.ok) return q;
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}$/.test(String(slot))) return { ok: false, error: 'Pick one of the open times offered.' };
   const valid = openTimes({ hours: q.hours, limit: 200, now }).some((o) => o.slot === slot);
