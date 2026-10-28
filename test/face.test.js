@@ -24,7 +24,11 @@ test('straight on at arm’s length: eye spacing within 3%, nose and mouth withi
   near(f.numbers.mouthWidthMm, 50, 0.08, 'mouth');
   near(f.distanceMm, 400, 0.05, 'phone distance');
   assert.equal(f.confidence, 'good');
-  assert.equal(f.symmetry.midlineSame, true);
+  // a left-right claim is made only when the turn estimate is sharp enough; if made, it must say "same"
+  assert.ok(f.symmetry === null || f.symmetry.midlineSame, JSON.stringify(f.symmetry));
+  assert.equal(run({ D: 500 }).symmetry, null); // too far for a left-right claim
+  const close = run({ D: 300 });
+  assert.equal(close.symmetry.midlineSame, true, JSON.stringify(close.symmetry));
 });
 
 test('phone at 25, 40 and 50 cm: eye spacing within 3% every time', () => {
@@ -54,13 +58,13 @@ test('head turned 12 degrees is caught and asks for a retake', () => {
 });
 
 test('a slight turn with a nose that sticks out is not reported as an uneven face', () => {
-  const f = run({ yawDeg: 5 }, { noseD: -10 });
+  const f = run({ yawDeg: 5, D: 300 }, { noseD: -10 });
   assert.equal(f.ok, true, f.ask);
   assert.ok(f.symmetry === null || f.symmetry.midlineSame, JSON.stringify(f.symmetry));
 });
 
 test('a naturally uneven face, head straight: reported in mm, never called "turned"', () => {
-  const f = run({}, { noseU: 4, eye: [{ u: -31.5, v: 0, a: 15, b: 6, d: 12 }, { u: 31.5, v: 0, a: 15, b: 6, d: 12 }] });
+  const f = run({ D: 300 }, { noseU: 4, eye: [{ u: -31.5, v: 0, a: 15, b: 6, d: 12 }, { u: 31.5, v: 0, a: 15, b: 6, d: 12 }] });
   assert.equal(f.ok, true, f.ask);
   assert.ok(!f.fixes.join(' ').match(/turned/));
   assert.equal(f.symmetry.midlineSame, false);
@@ -124,7 +128,7 @@ test('one eye missed: asks for another photo, no blame on glasses', () => {
 });
 
 test('no nose in the shot: measures, but makes no left-right claim', () => {
-  const s = scene();
+  const s = scene({ D: 300 });
   const o = s.objects;
   const f = measureFace({ card: o.card[0], eyes: o.eye, nose: null, mouth: o.mouth[0], frame: s.frame });
   assert.equal(f.ok, true, f.ask);
@@ -160,6 +164,28 @@ test('end to end: selfie + card comes back as a neutral face answer', async () =
   assert.deepEqual(r.overlay.outlines.map((o) => o.label).sort(), ['eye', 'eye', 'gift card', 'mouth', 'nose']);
 });
 
-test('"surface" is not a face', () => {
+test('"surface" is not a face; "distance between my eyes" is', () => {
   assert.notEqual(guessFromText('how big is this scratch on the surface').task, 'face');
+  assert.equal(guessFromText('what is the distance between my eyes').task, 'face');
+});
+
+test('one eye missed but its eyebrow found: no fake asymmetry, no confident wrong number', () => {
+  const eye = [{ u: -31.5, v: 0, a: 15, b: 6, d: 12 }, { u: -32, v: 16, a: 18, b: 4.5, d: 4 }, { u: 32, v: 16, a: 18, b: 4.5, d: 4 }];
+  const f = run({ D: 300 }, { eye });
+  assert.ok(!f.ok || (f.confidence !== 'good') || Math.abs(f.numbers.eyeCenterDistanceMm - 63) <= 2, JSON.stringify(f));
+  if (f.ok && f.symmetry) assert.ok(f.symmetry.midlineDifferenceMm < 5, JSON.stringify(f.symmetry));
+});
+
+test('a 3–4° turn with a forward nose at 45 cm makes no left-right claim', () => {
+  for (const yawDeg of [3, 4]) {
+    const f = run({ D: 450, yawDeg }, { noseD: -10 });
+    assert.equal(f.ok, true, f.ask);
+    assert.ok(f.symmetry === null || f.symmetry.midlineSame, JSON.stringify(f.symmetry));
+  }
+});
+
+test('a card stood on end asks to turn it level', () => {
+  const f = run({}, { card: { a: 26.99, b: 42.8, v: 70 } });
+  assert.equal(f.ok, false);
+  assert.match(f.ask, /long edge/);
 });

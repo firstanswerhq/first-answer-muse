@@ -95,10 +95,12 @@ export function cardGeometry(card) {
     const inset = 0.05 * Math.min(s1, s2);
     for (let i = 0; i < 4; i++) {
       const A = c[i], B = c[(i + 1) % 4];
-      const toC = unit(sub(center, A));
-      for (let k = 1; k < 20; k++) {
-        const t = k / 20;
-        const p = [A[0] + (B[0] - A[0]) * t + toC[0] * inset, A[1] + (B[1] - A[1]) * t + toC[1] * inset];
+      const e = unit(sub(B, A));
+      let nIn = [-e[1], e[0]];
+      if (dotp(nIn, sub(center, A)) < 0) nIn = [e[1], -e[0]]; // point toward the card's middle
+      for (let k = 0; k <= 16; k++) {
+        const t = 0.1 + (0.8 * k) / 16;
+        const p = [A[0] + (B[0] - A[0]) * t + nIn[0] * inset, A[1] + (B[1] - A[1]) * t + nIn[1] * inset];
         const col = Math.floor((p[0] - box.x1) * sx), row = Math.floor((p[1] - box.y1) * sy);
         total++;
         if (col >= 0 && row >= 0 && col < mask.width && row < mask.height && raster[row * mask.width + col]) inside++;
@@ -130,7 +132,13 @@ export function pickEyes(candidates, g, kEye = 1) {
     return { obj: o, px: c, w, h, aspect: w / Math.max(h, 0.1), off };
   }).filter(Boolean);
   const glassesLike = feats.some((f) => f.aspect < 1.7 && f.w >= 35);
-  const ok = feats.filter((f) => f.aspect >= 1.7 && f.aspect <= 5.2 && f.w > 15 && f.w < 45 && Math.abs(f.off) > halfShortMm + 3);
+  // An eyebrow sits 8–25 mm above an eye (farther from the eye, closer to the card); drop any
+  // candidate with another candidate just below it.
+  const along = (f) => dotp(f.px, g.longDir) * g.mmPerPx;
+  const isBrow = (f) => feats.some((o) => o !== f && Math.sign(o.off) === Math.sign(f.off)
+    && Math.abs(o.off) - Math.abs(f.off) >= 8 && Math.abs(o.off) - Math.abs(f.off) <= 25 && Math.abs(along(o) - along(f)) <= 10);
+  const ok = feats.filter((f) => f.aspect >= 1.7 && f.aspect <= 5.2 && f.w > 15 && f.w <= 36 && f.h >= 7
+    && Math.abs(f.off) > halfShortMm + 3 && !isBrow(f));
   let best = null;
   for (let i = 0; i < ok.length; i++) for (let j = i + 1; j < ok.length; j++) {
     const [a, b] = ok[i].px[0] <= ok[j].px[0] ? [ok[i], ok[j]] : [ok[j], ok[i]];
@@ -140,9 +148,9 @@ export function pickEyes(candidates, g, kEye = 1) {
     const angle = Math.acos(Math.min(1, Math.abs(dotp(unit(v), g.longDir))));
     const level = Math.abs(a.off - b.off);
     const ratio = sep / wAvg;
-    if (Math.abs(a.w - b.w) / wAvg > 0.3 || level > 0.25 * sep || angle > 25 * DEG || ratio < 1.6 || ratio > 2.8) continue;
+    if (Math.abs(a.w - b.w) / wAvg > 0.2 || level > 0.12 * sep || angle > 25 * DEG || ratio < 1.6 || ratio > 2.8) continue;
     const score = Math.abs(ratio - 2.1) + Math.abs(a.w - b.w) / wAvg + level / sep;
-    if (!best || score < best.score) best = { a, b, score };
+    if (!best || score < best.score) best = { a, b, score, angleDeg: angle / DEG };
   }
   return best ? { ...best, glassesLike } : { none: true, glassesLike };
 }
@@ -159,13 +167,17 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   const want = CARD.long / CARD.short;
   if (g.cornerGapMm > 4) return { ok: false, ask: 'A corner of the card looks covered. ' + CARD_ASK, card: g };
   if (g.edgeCover < 0.97) return { ok: false, ask: 'An edge of the card looks covered or cut off. ' + CARD_ASK, card: g };
-  if (g.aspect < want * 0.9 || g.aspect > want * 1.18) return { ok: false, ask: CARD_ASK, card: g };
+  if (g.aspect < want * 0.9 || g.aspect > want * 1.25) return { ok: false, ask: CARD_ASK, card: g };
+  // Card standing on end (long edge up and down) — the eyes are then found off to the side.
+  if (Math.abs(g.longDir[1]) > Math.abs(g.longDir[0])) return { ok: false, ask: 'Turn the card so its long edge runs left to right across your forehead, and send one more.' };
 
   const f = focalPxFor(frame, focal35);
   const D = f ? (f * CARD.long) / g.longPx : null;
   const k = (d) => (D ? (D + d) / D : 1);
   // Head turn (left/right) and phone tip (up/down) from the card's ends: ratio ≈ 1 + length·sin(angle)/D.
   const yawDeg = D ? Math.asin(Math.min(1, ((g.turnRatio - 1) * D) / CARD.long)) / DEG : null;
+  // How sure we are of that angle: about 1.5 px of outline error on the short sides.
+  const yawSigma = D ? Math.asin(Math.min(1, ((1.5 / g.shortPx) * D) / CARD.long)) / DEG : null;
   const tipDeg = D ? Math.asin(Math.min(1, ((g.tipRatio - 1) * D) / CARD.short)) / DEG : null;
   if (yawDeg != null && yawDeg > 20) return { ok: false, ask: 'Face the camera straight on and send one more.' };
 
@@ -195,23 +207,24 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   const fixes = [];
   let confidence = 'good';
   if (yawDeg != null && yawDeg > 6) { confidence = 'low'; fixes.push('Your head looks turned a little: face the camera straight on and send one more.'); }
-  if (tipDeg != null && tipDeg > 20) { confidence = 'low'; fixes.push('Hold the phone level with your eyes, not above or below.'); }
+  if (tipDeg != null && tipDeg > 20) { confidence = 'low'; fixes.push('Hold the phone at eye height; the card looks tilted.'); }
   if (!D) fixes.push('Phone distance unknown, so depth correction was skipped.');
 
   // Left-right comparison only from a straight-on photo with the nose in view; small differences are
   // within what one photo can show, so they're reported as "about the same".
   let symmetry = null;
-  if (noseF && (yawDeg == null || yawDeg <= 2.5)) {
+  const straight = yawDeg != null && yawDeg + yawSigma <= 3 && pair.angleDeg <= 6;
+  if (noseF && straight) {
     const off = (p) => Math.abs(dotp(sub(p, noseF.c), ue)) * s * k(DEPTH.eye);
     const dL = off(pair.a.px), dR = off(pair.b.px);
     const diff = Math.abs(dL - dR), wDiff = Math.abs(pair.a.w - pair.b.w);
     symmetry = {
       leftEyeToMidlineMm: mm0(dL), rightEyeToMidlineMm: mm0(dR),
       midlineDifferenceMm: mm0(diff), eyeWidthDifferenceMm: mm0(wDiff),
-      midlineSame: diff < 3.5, widthSame: wDiff < 3,
+      midlineSame: diff < 3.5 + (yawDeg + yawSigma), widthSame: wDiff < 3,
     };
   } else if (noseF) {
-    fixes.push('For a left-right comparison, face the camera dead straight.');
+    fixes.push('For a left-right comparison, face the camera dead straight with the phone about a foot away.');
   }
   return {
     ok: true, numbers, symmetry, confidence, fixes, note: NOTE, ruler: 'gift card',

@@ -79,11 +79,11 @@ export function guessFromText(text = '') {
   };
   const tile = t.match(/(\d+)\s*(?:x|by)\s*(\d+)\s*(?:in|inch|")?\s*tile/) || t.match(/tile[^\d]*(\d+)\s*(?:x|by)\s*(\d+)/);
   let task = 'size';
-  if (/shoe|foot|feet size|what size am i/.test(t)) task = 'shoe_size';
+  if (/\bface\b|\beyes?\b|symmetr|proportion|forehead/.test(t)) task = 'face';
+  else if (/shoe|foot|feet size|what size am i/.test(t)) task = 'shoe_size';
   else if (/windshield|chip|crack in (?:the )?glass|repair or replace/.test(t)) task = 'windshield_chip';
   else if (/tile|floor/.test(t)) task = 'floor_tile';
   else if (/\bfit\b|between/.test(t)) task = 'gap_fit';
-  else if (/\bface\b|symmetr|proportion|forehead/.test(t)) task = 'face';
   else if (/how tall|height/.test(t)) task = 'height';
   else if (/how far|distance/.test(t)) task = 'distance';
   return {
@@ -391,7 +391,7 @@ async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
   const frame = cardS.frame || eyeS.frame || noseS.frame;
   const card = best(cardS.objects), nose = best(noseS.objects), mouth = best(mouthS.objects);
   // Every 'eye' SAM returns (maybe eyebrows or glasses too); face.js picks the real pair by shape and position.
-  const eyes = eyeS.objects.filter((o) => o.c == null || o.c >= 0.3).slice(0, 8);
+  const eyes = eyeS.objects.filter((o) => o.c == null || o.c >= 0.3).sort((a, b) => (b.c ?? 1) - (a.c ?? 1)).slice(0, 8);
   pipeline.push({ model: 'sam-3.1', step: 'outline: card, eyes, nose, mouth', result: { card: cardS.objects.length, eyes: eyeS.objects.length, nose: noseS.objects.length, mouth: mouthS.objects.length } });
   const overlay = { frame, outlines: [outlineOf(card, 'gift card', 'ruler')].filter(Boolean), lines: [] };
   const f = measureFace({ card, eyes, nose, mouth, frame, focal35 });
@@ -403,7 +403,7 @@ async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
   const mmIn = (v) => (v == null ? null : `${v} mm (${(v / 25.4).toFixed(2)} in)`);
   const sy = f.symmetry;
   let symLine;
-  if (!sy) symLine = f.numbers.noseWidthMm == null ? ' A left-right comparison needs the nose clearly in the shot.' : ' For a left-right comparison, send a photo facing the camera dead straight.';
+  if (!sy) symLine = f.numbers.noseWidthMm == null ? ' A left-right comparison needs the nose clearly in the shot.' : '';
   else {
     const mid = sy.midlineSame
       ? 'Both eyes sit about the same distance from the midline of the nose (within what one photo can show)'
@@ -417,7 +417,7 @@ async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
     answer: `Measured against the gift card on your forehead${f.distanceMm ? `, phone about ${Math.round(f.distanceMm / 25.4)} in away` : ''}.${symLine}`,
     numbers: Object.entries(f.numbers).filter(([, v]) => v != null).map(([k, v]) => ({ label: faceLabel(k), value: mmIn(v) })),
     shopping: [],
-    steps: ['Same spot, same light, same card each time.', 'Face the camera straight on, phone at eye level, arm’s length.', 'One photo is good to about ±5% for eye spacing; nose and mouth are rough.'],
+    steps: ['Face the camera straight on, phone at eye height, about a foot to arm’s length away.', 'Good, even light; glasses off.', 'One photo is good to about ±5% for eye spacing; nose and mouth are rough.'],
     confidence: f.confidence,
     ask: f.fixes.length ? f.fixes.join(' ') : null,
     note: FACE_NOTE,
