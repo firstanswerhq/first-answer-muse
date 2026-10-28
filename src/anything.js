@@ -83,7 +83,7 @@ export function guessFromText(text = '') {
   else if (/windshield|chip|crack in (?:the )?glass|repair or replace/.test(t)) task = 'windshield_chip';
   else if (/tile|floor/.test(t)) task = 'floor_tile';
   else if (/\bfit\b|between/.test(t)) task = 'gap_fit';
-  else if (/face|symmetr|proportion|forehead/.test(t)) task = 'face';
+  else if (/\bface\b|symmetr|proportion|forehead/.test(t)) task = 'face';
   else if (/how tall|height/.test(t)) task = 'height';
   else if (/how far|distance/.test(t)) task = 'distance';
   return {
@@ -225,7 +225,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   if (read.ruler === 'none') read.ruler = DEFAULT_RULER[read.task];
 
   if (!live) return finishErr(read, pipeline, 'Measuring needs the Meta models switched on for this server.');
-  if (read.task === 'face') return faceFlow({ dataUrl, live, read, pipeline });
+  if (read.task === 'face') return faceFlow({ dataUrl, live, read, pipeline, focal35 });
 
   // 2. Outline the target(s) and the ruler at the same time.
   const upright = Boolean(UPRIGHT_CONCEPT[read.ruler]);
@@ -378,7 +378,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
 }
 
 // Face: SAM outlines the card, the face, both eyes, the nose and the mouth at once.
-async function faceFlow({ dataUrl, live, read, pipeline }) {
+async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
   const concepts = ['card', 'face', 'eye', 'nose', 'mouth'];
   let segs;
   try {
@@ -390,27 +390,37 @@ async function faceFlow({ dataUrl, live, read, pipeline }) {
   const [cardS, faceS, eyeS, noseS, mouthS] = segs;
   const frame = cardS.frame || faceS.frame || eyeS.frame;
   const card = best(cardS.objects), face = best(faceS.objects), nose = best(noseS.objects), mouth = best(mouthS.objects);
-  const eyes = eyeS.objects.filter((o) => o.c == null || o.c >= 0.35).sort((a, b) => (b.c ?? 1) - (a.c ?? 1)).slice(0, 2);
+  // Every 'eye' SAM returns (maybe eyebrows or glasses too); face.js picks the real pair by shape and position.
+  const eyes = eyeS.objects.filter((o) => o.c == null || o.c >= 0.3).slice(0, 8);
   pipeline.push({ model: 'sam-3.1', step: 'outline: card, face, eyes, nose, mouth', result: { card: cardS.objects.length, face: faceS.objects.length, eyes: eyeS.objects.length, nose: noseS.objects.length, mouth: mouthS.objects.length } });
-  const outlines = [outlineOf(card, 'gift card', 'ruler'), outlineOf(face, 'face', 'target'), ...eyes.map((e) => outlineOf(e, 'eye', 'target')), outlineOf(nose, 'nose', 'target'), outlineOf(mouth, 'mouth', 'target')].filter(Boolean);
+  const outlines = [outlineOf(card, 'gift card', 'ruler'), outlineOf(nose, 'nose', 'target'), outlineOf(mouth, 'mouth', 'target')].filter(Boolean);
   const overlay = { frame, outlines, lines: [] };
   if (!card) return finishErr(read, pipeline, 'Hold a gift card flat against your forehead, all four corners showing, and send one more.', 'face', overlay);
-  const f = measureFace({ card, face, eyes, nose, mouth, refKind: 'card' });
-  pipeline.push({ model: 'first-answer math', step: 'map the face to millimeters with the card', result: f.ok ? { confidence: f.confidence, symmetry: f.symmetry.overallPct } : f.ask });
+  const f = measureFace({ card, eyes, nose, mouth, frame, focal35, refKind: 'card' });
+  pipeline.push({ model: 'first-answer math', step: 'map the face to millimeters with the card', result: f.ok ? { confidence: f.confidence, phoneDistanceMm: f.distanceMm, pose: f.pose } : f.ask });
   if (!f.ok) return finishErr(read, pipeline, f.ask, 'face', overlay);
-  // Line between the eye centers.
-  if (eyes.length === 2) {
-    const c = eyes.map((e) => [(e.box.x1 + e.box.x2) / 2, (e.box.y1 + e.box.y2) / 2]).sort((a, b) => a[0] - b[0]);
-    overlay.lines.push({ from: c[0], to: c[1], label: `${f.numbers.eyeCenterDistanceMm} mm` });
+  // The two eyes face.js actually used: outline them and draw the line between their centers.
+  const usedEyes = eyes.filter((e) => f.eyeCentersPx && e);
+  for (const e of usedEyes) {
+    const cx = (e.box.x1 + e.box.x2) / 2, cy = (e.box.y1 + e.box.y2) / 2;
+    if (f.eyeCentersPx.some(([x, y]) => Math.hypot(x - cx, y - cy) < Math.max(e.box.x2 - e.box.x1, 10))) overlay.outlines.push(outlineOf(e, 'eye', 'target'));
   }
+  overlay.lines.push({ from: f.eyeCentersPx[0], to: f.eyeCentersPx[1], label: `${f.numbers.eyeCenterDistanceMm} mm` });
   const mmIn = (v) => (v == null ? null : `${v} mm (${(v / 25.4).toFixed(2)} in)`);
+  const s = f.symmetry;
+  const symLine = s
+    ? ` The eyes sit ${s.leftEyeToMidlineMm} mm (photo left) and ${s.rightEyeToMidlineMm} mm (photo right) from the midline of the nose, a ${s.midlineDifferenceMm} mm difference; eye widths differ by ${s.eyeWidthDifferenceMm} mm.`
+    : ' Left-right comparison needs the nose clearly in the shot.';
   return finish({
     task: 'face', read, overlay, pipeline,
-    headline: `${f.symmetry.overallPct}% symmetric`,
-    answer: `Measured against the gift card on your forehead. Eye center to eye center is ${f.numbers.eyeCenterDistanceMm} mm. Your eyes sit ${f.symmetry.leftEyeFromMidlineMm} and ${f.symmetry.rightEyeFromMidlineMm} mm from the midline, and their widths match ${f.symmetry.eyeWidthPct}%. Send the same kind of photo at each visit to track changes.`,
-    numbers: Object.entries(f.numbers).filter(([, v]) => v != null).map(([k, v]) => ({ label: faceLabel(k), value: mmIn(v) })),
+    headline: `Eye centers ${f.numbers.eyeCenterDistanceMm} mm apart`,
+    answer: `Measured against the gift card on your forehead${f.distanceMm ? `, phone about ${Math.round(f.distanceMm / 25.4)} in away` : ''}.${symLine}`,
+    numbers: [
+      ...Object.entries(f.numbers).filter(([, v]) => v != null).map(([k, v]) => ({ label: faceLabel(k), value: mmIn(v) })),
+      ...(s ? [{ label: 'Midline difference', value: `${s.midlineDifferenceMm} mm` }] : []),
+    ],
     shopping: [],
-    steps: ['Same spot, same light, same card on every visit.', 'Face the camera straight on, phone at eye level, arm’s length.', 'Changes over 2 mm get flagged when you compare visits.'],
+    steps: ['Same spot, same light, same card each time.', 'Face the camera straight on, phone at eye level, arm’s length.', 'One photo is good to about ±5% for eye spacing.'],
     confidence: f.confidence,
     ask: f.fixes.length ? f.fixes.join(' ') : null,
     note: FACE_NOTE,

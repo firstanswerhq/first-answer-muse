@@ -1,67 +1,120 @@
-// Face measuring against a gift card on the forehead, checked on drawn scenes with known sizes.
+// Face measuring against a gift card on the forehead, on a 3D test head with real depths:
+// eyes 12 mm behind the forehead, nose 8, mouth 20. True sizes: eye centers 63 mm apart,
+// eyes 30 wide, nose 34, mouth 50.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { measureFace, compareVisits } from '../src/face.js';
 import { measureAnything } from '../src/anything.js';
-import { camera, samSeg, rectShape, ellipseShape } from './flatscene.js';
+import { headScene, typicalFace } from './facescene.js';
 
-// A face drawn on a plane, in mm: card 85.6 x 54 on the forehead, eyes 63 mm apart center to center.
-function faceScene({ tiltDeg = 8, rightEyeW = 30, rightEyeX = 31.5, rollDeg = 0 } = {}) {
-  const cam = camera({ tiltDeg, D: 450, f: 1500, panDeg: 3 });
-  const rot = (x, y) => { const a = (rollDeg * Math.PI) / 180; return [x * Math.cos(a) - y * Math.sin(a), x * Math.sin(a) + y * Math.cos(a)]; };
-  const at = (x, y) => rot(x, y);
-  const shape = (fn, x, y, ...r) => { const [cx, cy] = at(x, y); return fn(cx, cy, ...r); };
-  const s = (o) => samSeg(cam, o.inside, o.boundary).objects[0];
-  return {
-    card: s(shape(rectShape, 0, -65, 85.6, 53.98, rollDeg)),
-    face: s(shape(ellipseShape, 0, 0, 72, 105)),
-    eyes: [s(shape(ellipseShape, -31.5, -10, 15, 6)), s(shape(ellipseShape, rightEyeX, -10, rightEyeW / 2, 6))],
-    nose: s(shape(ellipseShape, 0, 15, 17, 12)),
-    mouth: s(shape(ellipseShape, 0, 45, 25, 8)),
-  };
-}
+const run = (opts = {}, over = {}) => {
+  const s = headScene({ ...opts, features: typicalFace(over) });
+  const o = s.objects;
+  return measureFace({ card: o.card[0], eyes: o.eye, nose: o.nose[0], mouth: o.mouth[0], frame: s.frame });
+};
 const near = (got, want, tol, what) => assert.ok(Math.abs(got - want) / want <= tol, `${what}: got ${got}, want ${want}`);
 
-test('straight-on selfie: eye spacing, nose, mouth and face width within 3%', () => {
-  const sc = faceScene();
-  const f = measureFace(sc);
+test('straight on at arm’s length: eye spacing within 3%, nose and mouth within 5%', () => {
+  const f = run({ D: 400 });
   assert.equal(f.ok, true, f.ask);
   near(f.numbers.eyeCenterDistanceMm, 63, 0.03, 'eye spacing');
-  near(f.numbers.noseWidthMm, 34, 0.04, 'nose');
-  near(f.numbers.mouthWidthMm, 50, 0.04, 'mouth');
-  near(f.numbers.faceWidthMm, 144, 0.03, 'face width');
-  assert.ok(f.symmetry.overallPct >= 95, `symmetry ${f.symmetry.overallPct}`);
+  near(f.numbers.leftEyeWidthMm, 30, 0.07, 'eye width');
+  near(f.numbers.noseWidthMm, 34, 0.05, 'nose');
+  near(f.numbers.mouthWidthMm, 50, 0.05, 'mouth');
+  near(f.distanceMm, 400, 0.05, 'phone distance');
   assert.equal(f.confidence, 'good');
-  assert.match(f.note, /not a medical opinion/);
+  assert.ok(f.symmetry.midlineDifferenceMm <= 1, JSON.stringify(f.symmetry));
+  assert.equal(f.numbers.faceWidthMm, undefined); // not reported: hair/beard/ears make it unreliable
 });
 
-test('a tilted head (roll) still measures right', () => {
-  const f = measureFace(faceScene({ rollDeg: 12 }));
-  near(f.numbers.eyeCenterDistanceMm, 63, 0.03, 'eye spacing');
+test('phone closer or farther: eye spacing stays within 3%, so visits stay comparable', () => {
+  const a = run({ D: 300 }), b = run({ D: 500 });
+  near(a.numbers.eyeCenterDistanceMm, 63, 0.03, 'at 300 mm');
+  near(b.numbers.eyeCenterDistanceMm, 63, 0.03, 'at 500 mm');
+  assert.ok(Math.abs(a.numbers.eyeCenterDistanceMm - b.numbers.eyeCenterDistanceMm) <= 2);
 });
 
-test('a turned head is flagged with the exact fix', () => {
-  const f = measureFace(faceScene({ rightEyeW: 22, rightEyeX: 24 }));
+test('head turned 15 degrees is caught from the card and asks for a retake', () => {
+  const f = run({ D: 400, yawDeg: 15 });
   assert.equal(f.confidence, 'low');
-  assert.match(f.fixes.join(' '), /face the camera straight on/i);
+  assert.match(f.fixes.join(' '), /turned/);
 });
 
-test('visits compare and flag changes over 2 mm', () => {
-  const a = { numbers: { mouthWidthMm: 50, noseWidthMm: 34 } };
-  const b = { numbers: { mouthWidthMm: 53, noseWidthMm: 34.5 } };
+test('a naturally uneven face is NOT told its head is turned', () => {
+  // nose 3 mm off center, one eye 3 mm narrower, head straight
+  const f = run({ D: 400 }, { noseU: 3, eye: [{ u: -31.5, v: 0, a: 15, b: 6, d: 12 }, { u: 31.5, v: 0, a: 13.5, b: 6, d: 12 }] });
+  assert.equal(f.ok, true, f.ask);
+  assert.ok(!f.fixes.join(' ').match(/turned/), f.fixes.join(' '));
+  assert.ok(f.symmetry.midlineDifferenceMm >= 4 && f.symmetry.midlineDifferenceMm <= 8, JSON.stringify(f.symmetry));
+});
+
+test('head tilted sideways (roll) still measures right', () => {
+  near(run({ D: 400, rollDeg: 10 }).numbers.eyeCenterDistanceMm, 63, 0.03, 'eye spacing');
+});
+
+test('eyebrows returned as extra "eyes" are ignored', () => {
+  const eye = [
+    { u: -31.5, v: 0, a: 15, b: 6, d: 12 }, { u: 31.5, v: 0, a: 15, b: 6, d: 12 },
+    { u: -32, v: 16, a: 25, b: 4, d: 4, c: 0.97 }, { u: 32, v: 16, a: 25, b: 4, d: 4, c: 0.97 }, // eyebrows, more confident
+  ];
+  const f = run({ D: 400 }, { eye });
+  assert.equal(f.ok, true, f.ask);
+  near(f.numbers.eyeCenterDistanceMm, 63, 0.03, 'eye spacing');
+  near(f.numbers.leftEyeWidthMm, 30, 0.07, 'eye width');
+});
+
+test('glasses lenses instead of eyes: asks, never a confident wrong number', () => {
+  const f = run({ D: 400 }, { eye: [{ u: -32, v: 0, a: 25, b: 20, d: 2 }, { u: 32, v: 0, a: 25, b: 20, d: 2 }] });
+  assert.equal(f.ok, false);
+  assert.match(f.ask, /glasses/);
+});
+
+test('one eye missed: asks for another photo', () => {
+  const f = run({ D: 400 }, { eye: [{ u: -31.5, v: 0, a: 15, b: 6, d: 12 }] });
+  assert.equal(f.ok, false);
+});
+
+test('a fingertip over a card corner is refused, not trusted', () => {
+  const card = { hole: (du, dv) => Math.hypot(du - 42.8, dv + 27) < 14 };
+  const f = run({ D: 400 }, { card });
+  assert.equal(f.ok, false);
+  assert.match(f.ask, /corners/);
+});
+
+test('no nose in the shot: measures, but makes no left-right claim', () => {
+  const s = headScene({ D: 400, features: typicalFace() });
+  const o = s.objects;
+  const f = measureFace({ card: o.card[0], eyes: o.eye, nose: null, mouth: o.mouth[0], frame: s.frame });
+  assert.equal(f.ok, true, f.ask);
+  assert.equal(f.symmetry, null);
+});
+
+test('visits: compared only at a similar distance; flags real changes only', () => {
+  const a = { distanceMm: 400, numbers: { mouthWidthMm: 50, noseWidthMm: 34 } };
+  const b = { distanceMm: 410, numbers: { mouthWidthMm: 55, noseWidthMm: 35 } };
   const c = compareVisits(a, b);
-  assert.equal(c.find((x) => x.measure === 'mouthWidthMm').changed, true);
-  assert.equal(c.find((x) => x.measure === 'noseWidthMm').changed, false);
+  assert.equal(c.rows.find((x) => x.measure === 'mouthWidthMm').changed, true);
+  assert.equal(c.rows.find((x) => x.measure === 'noseWidthMm').changed, false);
+  assert.equal(compareVisits(a, { ...b, distanceMm: 520 }).ok, false);
 });
 
-test('end to end: a selfie with a card comes back as a face answer', async () => {
-  const sc = faceScene();
-  const seg = (o) => ({ objects: o ? [].concat(o) : [], frame: { w: 1280, h: 960 } });
-  const deps = { read: async () => ({ task: 'face', target: 'face', second_target: '', ruler: 'card', item_width_in: 0, tile_w_in: 0, tile_l_in: 0, shoe_for: 'unknown', summary: '' }),
-    segment: async (_d, c) => seg({ card: sc.card, face: sc.face, eye: sc.eyes, nose: sc.nose, mouth: sc.mouth }[c]) };
+test('end to end: selfie + card comes back as a neutral face answer', async () => {
+  const s = headScene({ D: 400, features: typicalFace() });
+  const o = s.objects;
+  const seg = (list) => ({ objects: list || [], frame: s.frame });
+  const deps = {
+    read: async () => ({ task: 'face', target: 'face', second_target: '', ruler: 'card', item_width_in: 0, tile_w_in: 0, tile_l_in: 0, shoe_for: 'unknown', summary: '' }),
+    segment: async (_d, c) => seg({ card: o.card, face: o.face, eye: o.eye, nose: o.nose, mouth: o.mouth }[c]),
+  };
   const r = await measureAnything({ dataUrl: 'x', text: 'measure my face', deps });
   assert.equal(r.ok, true, r.ask);
-  assert.match(r.headline, /% symmetric$/);
+  assert.match(r.headline, /^Eye centers \d+ mm apart$/);
   assert.match(r.note, /not a medical opinion/);
-  assert.ok(r.numbers.some((n) => n.label === 'Eye center to eye center'));
+  assert.doesNotMatch(r.answer + r.steps.join(' '), /symmetric|compare visits/i);
+  assert.equal(r.overlay.lines.length, 1);
+});
+
+test('"surface" is not a face', async () => {
+  const { guessFromText } = await import('../src/anything.js');
+  assert.notEqual(guessFromText('how big is this scratch on the surface').task, 'face');
 });

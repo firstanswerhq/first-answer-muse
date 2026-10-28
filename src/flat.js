@@ -271,6 +271,14 @@ function rectMap(refPts, R, boundary = []) {
   return { toMm: (p) => applyH(H, p), areaScale: (p) => jacobianDet(H, p[0], p[1]), corners: c, shapeCheck: ratio };
 }
 
+// Focal length in pixels: from the photo's 35 mm-equivalent focal length when known, else a typical
+// phone camera (69 degrees across the long side).
+export function focalPxFor(frame, focal35 = null) {
+  if (!frame?.w || !frame?.h) return null;
+  if (focal35 && focal35 > 8 && focal35 < 300) return (focal35 / 43.27) * Math.hypot(frame.w, frame.h);
+  return (0.5 * Math.max(frame.w, frame.h)) / Math.tan((69 * Math.PI) / 360);
+}
+
 // A ready-made photo-to-millimeters map from any everyday ruler (used by face.js and others).
 export function rulerMap(ref, refKind) {
   const R = FLAT_REFERENCES[refKind];
