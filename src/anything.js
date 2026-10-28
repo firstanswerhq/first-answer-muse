@@ -62,7 +62,7 @@ export function coinFromText(t) {
   if (/(1|one)[ -]?euro/.test(t)) return 'euro_1';
   if (/£1|pound coin/.test(t)) return 'uk_pound';
   if (/\b2p\b|two pence/.test(t)) return 'uk_2p';
-  const m = t.match(/\b(quarter|dime|nickel|penny)\b/);
+  const m = t.replace(/\bnickle\b/g, "nickel").replace(/\bpennies\b/g, "penny").match(/\b(quarter|dime|nickel|penny)\b/);
   if (!m) return null;
   return ca && m[1] !== 'penny' ? `ca_${m[1]}` : m[1];
 }
