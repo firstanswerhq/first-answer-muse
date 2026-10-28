@@ -106,3 +106,20 @@ test('reading the message without the model', () => {
   assert.equal(t.task, 'floor_tile');
   assert.deepEqual([t.tile_w_in, t.tile_l_in], [12, 24]);
 });
+
+test('a square coaster next to a coin: two sides, not the diagonal; "it’s a quarter" fixes the coin', async () => {
+  const cam = camera({ tiltDeg: 10, D: 450, f: 1400 });
+  const coaster = rectShape(-20, 0, 70, 70, 8), coin = ellipseShape(45, 10, 12.13, 12.13);
+  const scene = { coaster: samSeg(cam, coaster.inside, coaster.boundary), coin: samSeg(cam, coin.inside, coin.boundary) };
+  // The model says dime; the person says it's a quarter.
+  const r = await measureAnything({ dataUrl: 'x', text: 'how big is this? it’s a quarter', deps: deps(R({ target: 'coaster', ruler: 'dime' }), scene) });
+  assert.equal(r.ok, true, r.ask);
+  assert.match(r.headline, /square$/);
+  const side = r.numbers.find((n) => n.label === 'Long side').value;
+  assert.match(side, /2\.75 in|2\.7\d? in|2\.8 in/, side); // 70 mm = 2.76 in
+  assert.equal(r.overlay.outlines.find((o) => o.role === 'ruler').label, 'quarter');
+  assert.match(r.ask, /quarter as the ruler/);
+  // Believing it's a dime instead makes everything about 26% smaller — which is why the answer names the coin.
+  const d = await measureAnything({ dataUrl: 'x', text: 'how big is this', deps: deps(R({ target: 'coaster', ruler: 'dime' }), scene) });
+  assert.match(d.ask, /dime as the ruler/);
+});

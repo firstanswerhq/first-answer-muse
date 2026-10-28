@@ -30,7 +30,7 @@ task: what they want —
   size (anything else: how big is this).
 target: a short noun phrase naming the thing to measure, the way you'd label it in the photo ("chip", "crack", "foot", "floor", "fence", "tree", "stain").
 second_target: for gap_fit, the other side of the gap ("house wall", "garage"); else "".
-ruler: the everyday object of known size in the photo, from the list; prefer one lying flat right beside the target; doors count for gap_fit, height and distance. "none" if nothing.
+ruler: the everyday object of known size in the photo, from the list; prefer one lying flat right beside the target; doors count for gap_fit, height and distance. "none" if nothing. For a coin, look hard at which one: a penny is copper-colored; a dime is the smallest silver coin and thin; a nickel is thick with a smooth edge; a quarter is the biggest common coin with a ridged edge. Compare it with nearby things of known size. If unsure between dime and quarter, pick quarter (it is the coin people use to measure).
 item_width_in: for gap_fit, the width in inches of the thing they want to fit, from their message (a 12 ft shed = 144); else 0.
 tile_w_in, tile_l_in: tile size in inches if they said it, else 0.
 shoe_for: "men", "women" or "unknown", from the message.
@@ -77,6 +77,7 @@ export function guessFromText(text = '') {
     tile_w_in: tile ? +tile[1] : 0,
     tile_l_in: tile ? +tile[2] : 0,
     shoe_for: /women|woman|her\b|ladies/.test(t) ? 'women' : /\bmen\b|man\b|his\b/.test(t) ? 'men' : 'unknown',
+    coin: (t.match(/\b(quarter|dime|nickel|penny)\b/) || [])[1] || null,
     _num: num,
   };
 }
@@ -150,6 +151,36 @@ function longestLine(obj) {
   } catch { return null; }
 }
 
+// A line along the long side of a boxy outline (through its middle), in photo pixels.
+function rectSideLine(obj) {
+  try {
+    const pts = maskBoundary(obj);
+    if (pts.length < 8) return null;
+    const P = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lo = [], up = [];
+    for (const p of P) { while (lo.length >= 2 && cr(lo.at(-2), lo.at(-1), p) <= 0) lo.pop(); lo.push(p); }
+    for (const p of P.slice().reverse()) { while (up.length >= 2 && cr(up.at(-2), up.at(-1), p) <= 0) up.pop(); up.push(p); }
+    const hull = lo.slice(0, -1).concat(up.slice(0, -1));
+    let bestR = null;
+    for (let i = 0; i < hull.length; i++) {
+      const [x1, y1] = hull[i], [x2, y2] = hull[(i + 1) % hull.length];
+      const L = Math.hypot(x2 - x1, y2 - y1);
+      if (L < 1e-9) continue;
+      const u = [(x2 - x1) / L, (y2 - y1) / L], v = [-u[1], u[0]];
+      let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+      for (const [x, y] of hull) { const a = x * u[0] + y * u[1], b = x * v[0] + y * v[1]; a0 = Math.min(a0, a); a1 = Math.max(a1, a); b0 = Math.min(b0, b); b1 = Math.max(b1, b); }
+      const area = (a1 - a0) * (b1 - b0);
+      if (!bestR || area < bestR.area) bestR = { area, u, v, a0, a1, b0, b1 };
+    }
+    const { u, v, a0, a1, b0, b1 } = bestR;
+    const long = a1 - a0 >= b1 - b0;
+    const pt = (a, b) => [a * u[0] + b * v[0], a * u[1] + b * v[1]];
+    // Run the line along the near (bottom) long edge, nudged inside, so it reads like a tape on that side.
+    return long ? { from: pt(a0, b1 - (b1 - b0) * 0.08), to: pt(a1, b1 - (b1 - b0) * 0.08) } : { from: pt(a1 - (a1 - a0) * 0.08, b0), to: pt(a1 - (a1 - a0) * 0.08, b1) };
+  } catch { return null; }
+}
+
 // ---------- the main flow ----------
 
 /**
@@ -175,6 +206,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   // The person's own words win on numbers they typed.
   if (guess.item_width_in) read.item_width_in = guess.item_width_in;
   if (guess.tile_w_in) { read.tile_w_in = guess.tile_w_in; read.tile_l_in = guess.tile_l_in; }
+  if (guess.coin) read.ruler = guess.coin; // "it's a quarter" corrects the coin
   if (read.ruler === 'none') read.ruler = DEFAULT_RULER[read.task];
 
   if (!live) return finishErr(read, pipeline, 'Measuring needs the Meta models switched on for this server.');
@@ -197,7 +229,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   const target = best(tSeg.objects), ruler = best(rSeg.objects), other = bSeg ? best(bSeg.objects) : null;
   pipeline.push({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: { [concepts[0]]: tSeg.objects.length, [concepts[1]]: rSeg.objects.length, ...(bSeg ? { [concepts[2]]: bSeg.objects.length } : {}) } });
 
-  const outlines = [outlineOf(target, concepts[0], 'target'), outlineOf(ruler, `ruler: ${rulerLabel(read.ruler)}`, 'ruler'), other && outlineOf(other, concepts[2], 'target')].filter(Boolean);
+  const outlines = [outlineOf(target, concepts[0], 'target'), outlineOf(ruler, rulerLabel(read.ruler), 'ruler'), other && outlineOf(other, concepts[2], 'target')].filter(Boolean);
   const overlay = { frame, outlines, lines: [] };
   const base = { task: read.task, read, overlay, pipeline };
 
@@ -301,7 +333,24 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
     });
   }
 
-  // General size.
+  // General size. Boxy things (a coaster, a rug, a phone) get their two sides; round or odd shapes
+  // get their longest stretch and average width.
+  const boxy = m.rectLengthMm && m.rectWidthMm && m.areaMm2 / (m.rectLengthMm * m.rectWidthMm) > 0.85;
+  const coinTip = FLAT_REFERENCES[refKind].shape === 'circle' ? `Measured with a ${FLAT_REFERENCES[refKind].label} as the ruler — if that coin is something else, reply with its name (quarter, dime, nickel or penny).` : null;
+  const tips = [...m.notes, coinTip].filter(Boolean).join(' ') || null;
+  if (boxy) {
+    const side = rectSideLine(target);
+    if (side) overlay.lines.push({ ...side, label: inchStr(m.rectLengthMm) });
+    const sq = Math.abs(m.rectLengthMm - m.rectWidthMm) / m.rectLengthMm < 0.06;
+    return finish({
+      ...base,
+      headline: sq ? `${inchStr(m.rectLengthMm)} square` : `${inchStr(m.rectLengthMm)} × ${inchStr(m.rectWidthMm)}`,
+      answer: `${cap(concepts[0])}: ${inchStr(m.rectLengthMm)} × ${inchStr(m.rectWidthMm)} (${(m.rectLengthMm / 10).toFixed(1)} × ${(m.rectWidthMm / 10).toFixed(1)} cm), measured against the ${m.ruler}.`,
+      numbers: [{ label: 'Long side', value: `${inchStr(m.rectLengthMm)} · ${(m.rectLengthMm / 10).toFixed(1)} cm` }, { label: 'Short side', value: `${inchStr(m.rectWidthMm)} · ${(m.rectWidthMm / 10).toFixed(1)} cm` }, { label: 'Area', value: `${m.areaIn2} sq in` }],
+      shopping: [], steps: ['Send the same shot again later to see if it changed.'],
+      confidence: m.confidence, ask: tips,
+    });
+  }
   if (line) overlay.lines.push({ ...line, label: inchStr(m.lengthMm) });
   return finish({
     ...base,
@@ -309,7 +358,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
     answer: `${cap(concepts[0])}: ${inchStr(m.lengthMm)} long, about ${inchStr(m.widthMm)} wide, ${m.areaIn2} sq in, measured against the ${m.ruler}.`,
     numbers: [{ label: 'Length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'Width', value: inchStr(m.widthMm) }, { label: 'Area', value: `${m.areaIn2} sq in` }],
     shopping: [], steps: ['Send the same shot again later to see if it changed.'],
-    confidence: m.confidence, ask: m.notes.length ? m.notes.join('; ') : null,
+    confidence: m.confidence, ask: tips,
   });
 }
 
