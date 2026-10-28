@@ -79,7 +79,7 @@ export function guessFromText(text = '') {
   };
   const tile = t.match(/(\d+)\s*(?:x|by)\s*(\d+)\s*(?:in|inch|")?\s*tile/) || t.match(/tile[^\d]*(\d+)\s*(?:x|by)\s*(\d+)/);
   let task = 'size';
-  if (/\bface\b|\beyes?\b|symmetr|proportion|forehead/.test(t)) task = 'face';
+  if (/\b(?:my|your|her|his|their)\s+(?:face|eyes?|forehead|pupils?)\b|between (?:my|the|your|her|his) eyes|eye spacing|\bpupils?\b|\bpd\b|symmetr/.test(t)) task = 'face';
   else if (/shoe|foot|feet size|what size am i/.test(t)) task = 'shoe_size';
   else if (/windshield|chip|crack in (?:the )?glass|repair or replace/.test(t)) task = 'windshield_chip';
   else if (/tile|floor/.test(t)) task = 'floor_tile';

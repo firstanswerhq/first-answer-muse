@@ -148,7 +148,7 @@ export function pickEyes(candidates, g, kEye = 1) {
     const angle = Math.acos(Math.min(1, Math.abs(dotp(unit(v), g.longDir))));
     const level = Math.abs(a.off - b.off);
     const ratio = sep / wAvg;
-    if (Math.abs(a.w - b.w) / wAvg > 0.2 || level > 0.12 * sep || angle > 25 * DEG || ratio < 1.6 || ratio > 2.8) continue;
+    if (Math.abs(a.w - b.w) / wAvg > 0.2 || level > 0.16 * sep || angle > 25 * DEG || ratio < 1.6 || ratio > 2.8) continue;
     const score = Math.abs(ratio - 2.1) + Math.abs(a.w - b.w) / wAvg + level / sep;
     if (!best || score < best.score) best = { a, b, score, angleDeg: angle / DEG };
   }
@@ -170,6 +170,11 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   if (g.aspect < want * 0.9 || g.aspect > want * 1.25) return { ok: false, ask: CARD_ASK, card: g };
   // Card standing on end (long edge up and down) — the eyes are then found off to the side.
   if (Math.abs(g.longDir[1]) > Math.abs(g.longDir[0])) return { ok: false, ask: 'Turn the card so its long edge runs left to right across your forehead, and send one more.' };
+  // Card running off the side of the photo: the cut edge looks like a real edge, so refuse it.
+  const bx = card.box;
+  if (bx && frame && (bx.x1 <= 2 || bx.y1 <= 2 || bx.x2 >= frame.w - 3 || bx.y2 >= frame.h - 3)) {
+    return { ok: false, ask: 'The card runs off the edge of the photo. ' + CARD_ASK, card: g };
+  }
 
   const f = focalPxFor(frame, focal35);
   const D = f ? (f * CARD.long) / g.longPx : null;
@@ -196,6 +201,12 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
     return pts.length < 6 ? null : { c: centroid(pts), w: extent(pts, ue) * s * k(d) };
   };
   const noseF = widthOf(nose, DEPTH.nose), mouthF = widthOf(mouth, DEPTH.mouth);
+  // Eyebrows taken for eyes sit far above the nose: eye line to nose center is ~0.4–0.65 of the
+  // eye spacing on real faces, eyebrows push it well past that.
+  if (noseF) {
+    const drop = Math.abs(dotp(sub(noseF.c, pair.a.px), [-ue[1], ue[0]])) / len(eyeVec);
+    if (drop > 0.8) return { ok: false, ask: 'I couldn’t find both eyes clearly. Face the camera straight on in good light and send one more.' };
+  }
   const numbers = {
     eyeCenterDistanceMm: mm0(ipd),
     leftEyeWidthMm: mm0(pair.a.w),
@@ -206,14 +217,18 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
 
   const fixes = [];
   let confidence = 'good';
-  if (yawDeg != null && yawDeg > 6) { confidence = 'low'; fixes.push('Your head looks turned a little: face the camera straight on and send one more.'); }
-  if (tipDeg != null && tipDeg > 20) { confidence = 'low'; fixes.push('Hold the phone at eye height; the card looks tilted.'); }
+  if (yawDeg != null && yawDeg - yawSigma > 6) { confidence = 'low'; fixes.push('Your head looks turned a little: face the camera straight on and send one more.'); }
+  if (pair.a.w > 34 || pair.b.w > 34) { confidence = 'low'; fixes.push('The eyes came out wider than usual (eyebrows may have been picked up): face the camera in good, even light and send one more.'); }
+  if (tipDeg != null && tipDeg > 30) { confidence = 'low'; fixes.push('Hold the phone at eye height; the card looks tilted.'); }
   if (!D) fixes.push('Phone distance unknown, so depth correction was skipped.');
 
   // Left-right comparison only from a straight-on photo with the nose in view; small differences are
   // within what one photo can show, so they're reported as "about the same".
   let symmetry = null;
-  const straight = yawDeg != null && yawDeg + yawSigma <= 3 && pair.angleDeg <= 6;
+  // A face off to the side of the photo is seen at an angle even when the head is square to the phone;
+  // the nose (in front of the eyes) then shifts sideways against them.
+  const offAxisDeg = f && noseF ? Math.abs(Math.atan(dotp(sub(noseF.c, [frame.w / 2, frame.h / 2]), ue) / f)) / DEG : 90;
+  const straight = yawDeg != null && yawDeg + yawSigma <= 3 && pair.angleDeg <= 6 && offAxisDeg <= 4;
   if (noseF && straight) {
     const off = (p) => Math.abs(dotp(sub(p, noseF.c), ue)) * s * k(DEPTH.eye);
     const dL = off(pair.a.px), dR = off(pair.b.px);
@@ -221,10 +236,10 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
     symmetry = {
       leftEyeToMidlineMm: mm0(dL), rightEyeToMidlineMm: mm0(dR),
       midlineDifferenceMm: mm0(diff), eyeWidthDifferenceMm: mm0(wDiff),
-      midlineSame: diff < 3.5 + (yawDeg + yawSigma), widthSame: wDiff < 3,
+      midlineSame: diff < 3.5 + (yawDeg + yawSigma) + 2 * 25 * Math.tan(offAxisDeg * DEG), widthSame: wDiff < 3,
     };
   } else if (noseF) {
-    fixes.push('For a left-right comparison, face the camera dead straight with the phone about a foot away.');
+    fixes.push('For a left-right comparison, face the camera dead straight with your face in the middle of the photo, the card level, and the phone about a foot away.');
   }
   return {
     ok: true, numbers, symmetry, confidence, fixes, note: NOTE, ruler: 'gift card',

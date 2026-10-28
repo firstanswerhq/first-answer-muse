@@ -10,10 +10,10 @@ const DEG = Math.PI / 180;
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 
-export function headScene({ D = 400, yawDeg = 0, pitchDeg = 0, rollDeg = 0, W = 1080, H = 1440, hfov = 69, features }) {
+export function headScene({ D = 400, offX = 0, yawDeg = 0, pitchDeg = 0, rollDeg = 0, W = 1080, H = 1440, hfov = 69, features }) {
   const f = (0.5 * Math.max(W, H)) / Math.tan((hfov * DEG) / 2);
   const cx = W / 2, cy = H / 2;
-  const C = [0, 0, D + 90];
+  const C = [offX, 0, D + 90];
   const ry = yawDeg * DEG, rx = pitchDeg * DEG, rz = rollDeg * DEG;
   const rot = ([x, y, z]) => {
     let p = [x * Math.cos(rz) - y * Math.sin(rz), x * Math.sin(rz) + y * Math.cos(rz), z];
@@ -29,8 +29,11 @@ export function headScene({ D = 400, yawDeg = 0, pitchDeg = 0, rollDeg = 0, W = 
     for (const ft of [].concat(list)) {
       const s = (ft.slopeDeg || 0) * DEG;
       const O = toWorld(ft.u, ft.v, ft.d || 0);
-      const ex = rot([1, 0, 0]);
-      const ey = rot([0, Math.cos(s), Math.sin(s)]); // up the feature, leaning back by the slope
+      const ex0 = rot([1, 0, 0]);
+      const ey0 = rot([0, Math.cos(s), Math.sin(s)]); // up the feature, leaning back by the slope
+      const sp = (ft.spinDeg || 0) * DEG; // feature turned in its own plane (a card set on at an angle)
+      const ex = ex0.map((v, i) => Math.cos(sp) * v + Math.sin(sp) * ey0[i]);
+      const ey = ey0.map((v, i) => -Math.sin(sp) * ex0[i] + Math.cos(sp) * v);
       const n = cross(ex, ey);
       const at = (x, y) => [O[0] + ex[0] * x + ey[0] * y, O[1] + ex[1] * x + ey[1] * y, O[2] + ex[2] * x + ey[2] * y];
       const outline = ft.shape === 'rect'

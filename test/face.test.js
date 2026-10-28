@@ -189,3 +189,37 @@ test('a card stood on end asks to turn it level', () => {
   assert.equal(f.ok, false);
   assert.match(f.ask, /long edge/);
 });
+
+test('card set on 8° crooked on the forehead still measures', () => {
+  for (const spinDeg of [8, -8]) {
+    const f = run({}, { card: { spinDeg } });
+    assert.equal(f.ok, true, `${spinDeg}°: ${f.ask}`);
+    near(f.numbers.eyeCenterDistanceMm, 63, 0.05, `spin ${spinDeg}`);
+  }
+});
+
+test('a straight, even face off to the side of the photo is never called uneven', () => {
+  for (const offX of [-60, -40, 40, 60]) for (const D of [300, 400]) {
+    const f = run({ D, offX }, { noseD: -15 });
+    assert.equal(f.ok, true, f.ask);
+    assert.ok(f.symmetry === null || f.symmetry.midlineSame, `offX ${offX} D ${D}: ${JSON.stringify(f.symmetry)}`);
+  }
+});
+
+test('card running off the edge of the photo is refused', () => {
+  const s = scene({ D: 250, offX: 90 }); // card end about 4 mm past the right edge of the photo
+  const o = s.objects;
+  const g = measureFace({ card: o.card[0], eyes: o.eye, nose: o.nose[0], mouth: o.mouth[0], frame: s.frame });
+  assert.equal(o.card[0].box.x2 >= s.frame.w - 3, true);
+  assert.equal(g.ok, false);
+  assert.match(g.ask, /edge/);
+});
+
+test('text routing: only a person’s face goes to face mode', () => {
+  for (const t of ['windshield chip at eye level', 'card at eye height', 'face of this cabinet', 'proportion of the room']) {
+    assert.notEqual(guessFromText(t).task, 'face', t);
+  }
+  for (const t of ['how far apart are my pupils', 'measure my PD', 'measure my face', 'how far apart are my eyes']) {
+    assert.equal(guessFromText(t).task, 'face', t);
+  }
+});
