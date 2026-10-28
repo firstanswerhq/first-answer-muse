@@ -60,19 +60,23 @@ export async function samSegment({ dataUrl, concept }) {
   return parseSam(text);
 }
 
-// Parse SAM's special-token text into boxes. We only need boxes (count + area), not the masks.
-// Line: <0f>id<|box;x1=..;y1=..;x2=..;y2=..;w=..;h=..;c=..|><|mask;...|>,id<|box...|>...
+// Parse SAM's special-token text into objects: box, confidence, and the mask (still encoded).
+// Line: <0f>id<|box;x1=..;y1=..;x2=..;y2=..;w=..;h=..;c=..|><|mask;x=0;y=0;c=..;data=H,W,~payload|>,id<|box...|>...
+// The mask raster covers the object's box (H rows by W columns); measure.js decodes it.
 export function parseSam(text) {
   const objects = [];
   if (!text) return { objects, frame: null };
   const line = text.split('\n').find((l) => l.startsWith('<0f>')) || text.split('\n')[0];
-  const re = /(\d+)<\|box;([^|]*)\|>/g;
+  const re = /(\d+)<\|box;([^|]*)\|>(?:<\|mask;(.*?)\|>)?/g;
   let m, frame = null;
   while ((m = re.exec(line))) {
     const kv = Object.fromEntries(m[2].split(';').map((p) => p.split('=')));
     const box = { x1: +kv.x1, y1: +kv.y1, x2: +kv.x2, y2: +kv.y2 };
     frame = { w: +kv.w, h: +kv.h };
-    objects.push({ id: +m[1], box, c: kv.c !== undefined ? +kv.c : null, areaShare: ((box.x2 - box.x1) * (box.y2 - box.y1)) / (+kv.w * +kv.h) });
+    let mask = null;
+    const dm = m[3] && m[3].match(/data=(\d+),(\d+),([~!])(.*)$/);
+    if (dm) mask = { height: +dm[1], width: +dm[2], encoding: dm[3] === '~' ? 'lossless' : 'one_bit', payload: dm[3] + dm[4] };
+    objects.push({ id: +m[1], box, c: kv.c !== undefined ? +kv.c : null, areaShare: ((box.x2 - box.x1) * (box.y2 - box.y1)) / (+kv.w * +kv.h), mask });
   }
   return { objects, frame };
 }
