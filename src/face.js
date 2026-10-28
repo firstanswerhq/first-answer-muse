@@ -139,7 +139,7 @@ export function pickEyes(candidates, g, kEye = 1) {
   const along = (f) => dotp(f.px, g.longDir) * g.mmPerPx;
   const isBrow = (f) => feats.some((o) => o !== f && Math.sign(o.off) === Math.sign(f.off)
     && Math.abs(o.off) - Math.abs(f.off) >= 8 && Math.abs(o.off) - Math.abs(f.off) <= 25 && Math.abs(along(o) - along(f)) <= 10);
-  const ok = feats.filter((f) => f.aspect >= 1.7 && f.aspect <= 5.2 && f.w > 15 && f.w <= 36 && f.h >= 5
+  const ok = feats.filter((f) => f.aspect >= 1.7 && f.aspect <= (f.h < 7 ? 6 : 5.2) && f.w > 15 && f.w <= 36 && f.h >= 5
     && Math.abs(f.off) > halfShortMm + 3 && !isBrow(f));
   // The user's eyes sit under the card; a pair far off to one side belongs to someone else (or a poster).
   const awayFromCard = (a, b) => Math.abs(dotp(sub([(a.px[0] + b.px[0]) / 2, (a.px[1] + b.px[1]) / 2], g.center), g.longDir)) * g.mmPerPx;
@@ -202,15 +202,15 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   const ue = unit(eyeVec); // the face's own horizontal
   // The card sits hMm above the eyes. Tilt of the card is forehead slope (top leans back) plus any nod
   // of the head; a nod moves the eyes nearer or farther than the card. If the card's top edge is the
-  // nearer one, the tilt can only be a nod, so correct for it; if the top leans back, slope and nod can't be
-  // told apart from one photo, so that part is carried as uncertainty instead.
+  // nearer one, the tilt can only be a nod, so correct for all of it; if the top leans back, slope and nod
+  // can't be told apart from one photo, so split the difference (correct for half).
   const eyeMid = [(pair.a.px[0] + pair.b.px[0]) / 2, (pair.a.px[1] + pair.b.px[1]) / 2];
   const hMm = Math.abs(dotp(sub(g.center, eyeMid), [-ue[1], ue[0]])) * s;
   const [e1, e2] = g.longEdges;
   const topE = len(sub(e1.mid, eyeMid)) > len(sub(e2.mid, eyeMid)) ? e1 : e2;
   const topNearer = topE.len > (topE === e1 ? e2 : e1).len;
   const tiltShift = tipDeg == null ? 0 : hMm * Math.sin(tipDeg * DEG); // mm
-  const eyeD = DEPTH.eye + (topNearer ? tiltShift : 0);
+  const eyeD = DEPTH.eye + (topNearer ? tiltShift : -tiltShift / 2);
   const kE = k(eyeD) / k(DEPTH.eye); // pickEyes sized the eyes at the plain depth
   const ipd = len(eyeVec) * s * k(eyeD);
   if (ipd < 45 || ipd > 80) return { ok: false, ask: 'The sizes came out unusual. Make sure it’s a standard gift card flat on your forehead, and send one more.' };
