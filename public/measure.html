@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Measure Anything · First Answer</title>
+<meta name="description" content="Text one photo, get an exact measurement back. Powered by Meta Muse Spark and SAM 3.1.">
+<link rel="stylesheet" href="measure.css">
+</head>
+<body>
+<header class="m-top">
+  <div class="m-brand">
+    <span class="m-dot"></span>
+    <div>
+      <h1>First Answer <span class="m-dash">—</span> <span class="m-tag">Measure anything. Text a photo.</span></h1>
+      <p class="m-sub">Powered by <b class="c-spark">Meta Muse Spark</b> + <b class="c-sam">SAM 3.1</b></p>
+    </div>
+  </div>
+</header>
+
+<main class="m-stage">
+  <div class="m-samples" id="samples" aria-label="Try a sample"></div>
+
+  <section class="m-phone" aria-label="Text a photo">
+    <div class="m-head">
+      <div class="m-avatar" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M3 7h18v10H3zM5 9v6h14V9h-1v3h-1V9h-1v2h-1V9h-1v3h-1V9h-1v2h-1V9h-1v3H9V9H8v2H7V9H6v3H5z"/></svg>
+      </div>
+      <div>
+        <div class="m-name">First Answer</div>
+        <div class="m-status">Send one photo with a ruler in it</div>
+      </div>
+    </div>
+
+    <div class="m-thread" id="thread" aria-live="polite"></div>
+
+    <div class="m-staged hidden" id="staged">
+      <img id="stagedImg" alt="Photo ready to send">
+      <span>Photo ready. Add a question and tap Send.</span>
+      <button type="button" id="unstage" aria-label="Remove photo">&times;</button>
+    </div>
+
+    <form class="m-compose" id="compose">
+      <label class="m-cam" title="Attach a photo">
+        <input type="file" id="photoIn" accept="image/*" hidden>
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M9 4 7.2 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.2L15 4H9zm3 5a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>
+        <span class="sr">Attach a photo</span>
+      </label>
+      <input id="textIn" autocomplete="off" placeholder="Ask about your photo...">
+      <button class="m-send" type="submit" id="sendBtn">Send</button>
+    </form>
+  </section>
+</main>
+
+<script type="module" src="measure.js"></script>
+</body>
+</html>
