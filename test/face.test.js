@@ -223,3 +223,23 @@ test('text routing: only a person’s face goes to face mode', () => {
     assert.equal(guessFromText(t).task, 'face', t);
   }
 });
+
+test('review B: covered card end, brows only, second face, narrow eyes', () => {
+  // hair covering a 7 mm straight strip of one end
+  const cut = run({}, { card: { hole: (du) => du > 42.8 - 7 } });
+  assert.ok(!cut.ok || Math.abs(cut.numbers.eyeCenterDistanceMm - 63) <= 2, JSON.stringify(cut.numbers || cut.ask));
+  // only eyebrows come back as "eyes"
+  const brows = run({}, { eye: [{ u: -33, v: 16, a: 15, b: 4, d: 4 }, { u: 33, v: 16, a: 15, b: 4, d: 4 }] });
+  assert.ok(!brows.ok || brows.confidence === 'low', JSON.stringify(brows.numbers || brows.ask));
+  // a second, smaller-spaced face far to the side, user's own eyes missed
+  const other = run({}, { eye: [{ u: 120, v: 0, a: 14, b: 6, d: 12 }, { u: 178, v: 0, a: 14, b: 6, d: 12 }] });
+  assert.equal(other.ok, false);
+  // narrow (6 mm tall) eye openings are accepted
+  const narrow = run({}, { eye: [{ u: -31.5, v: 0, a: 15, b: 3, d: 12 }, { u: 31.5, v: 0, a: 15, b: 3, d: 12 }] });
+  assert.equal(narrow.ok, true, narrow.ask);
+});
+
+test('review B routing', () => {
+  for (const t of ['pupillary distance', 'what is my IPD', 'eye distance please', 'distance between eyes', "measure my kid's eyes"]) assert.equal(guessFromText(t).task, 'face', t);
+  for (const t of ['is this shelf symmetrical', 'size my face mask', 'face shield size', 'my eye bolt', 'forehead thermometer', 'PD said the road is closed']) assert.notEqual(guessFromText(t).task, 'face', t);
+});

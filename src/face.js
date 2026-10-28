@@ -20,7 +20,7 @@
 import { decodeMaskToRaster } from '@meta-sam/parser';
 import { maskPoints, maskBoundary, rectCorners, focalPxFor } from './flat.js';
 
-export const NOTE = 'Measurements only, not a medical opinion.';
+export const NOTE = 'Measurements only, not a medical opinion, and not for ordering prescription glasses.';
 const CARD = { long: 85.6, short: 53.98 };
 const DEPTH = { eye: 12, nose: 8, mouth: 20 };
 const DEG = Math.PI / 180;
@@ -137,8 +137,10 @@ export function pickEyes(candidates, g, kEye = 1) {
   const along = (f) => dotp(f.px, g.longDir) * g.mmPerPx;
   const isBrow = (f) => feats.some((o) => o !== f && Math.sign(o.off) === Math.sign(f.off)
     && Math.abs(o.off) - Math.abs(f.off) >= 8 && Math.abs(o.off) - Math.abs(f.off) <= 25 && Math.abs(along(o) - along(f)) <= 10);
-  const ok = feats.filter((f) => f.aspect >= 1.7 && f.aspect <= 5.2 && f.w > 15 && f.w <= 36 && f.h >= 7
+  const ok = feats.filter((f) => f.aspect >= 1.7 && f.aspect <= 5.2 && f.w > 15 && f.w <= 36 && f.h >= 5
     && Math.abs(f.off) > halfShortMm + 3 && !isBrow(f));
+  // The user's eyes sit under the card; a pair far off to one side belongs to someone else (or a poster).
+  const awayFromCard = (a, b) => Math.abs(dotp(sub([(a.px[0] + b.px[0]) / 2, (a.px[1] + b.px[1]) / 2], g.center), g.longDir)) * g.mmPerPx;
   let best = null;
   for (let i = 0; i < ok.length; i++) for (let j = i + 1; j < ok.length; j++) {
     const [a, b] = ok[i].px[0] <= ok[j].px[0] ? [ok[i], ok[j]] : [ok[j], ok[i]];
@@ -148,7 +150,7 @@ export function pickEyes(candidates, g, kEye = 1) {
     const angle = Math.acos(Math.min(1, Math.abs(dotp(unit(v), g.longDir))));
     const level = Math.abs(a.off - b.off);
     const ratio = sep / wAvg;
-    if (Math.abs(a.w - b.w) / wAvg > 0.2 || level > 0.16 * sep || angle > 25 * DEG || ratio < 1.6 || ratio > 2.8) continue;
+    if (Math.abs(a.w - b.w) / wAvg > 0.2 || level > 0.2 * sep || awayFromCard(a, b) > 35 || angle > 25 * DEG || ratio < 1.6 || ratio > 2.8) continue;
     const score = Math.abs(ratio - 2.1) + Math.abs(a.w - b.w) / wAvg + level / sep;
     if (!best || score < best.score) best = { a, b, score, angleDeg: angle / DEG };
   }
@@ -167,7 +169,7 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   const want = CARD.long / CARD.short;
   if (g.cornerGapMm > 4) return { ok: false, ask: 'A corner of the card looks covered. ' + CARD_ASK, card: g };
   if (g.edgeCover < 0.97) return { ok: false, ask: 'An edge of the card looks covered or cut off. ' + CARD_ASK, card: g };
-  if (g.aspect < want * 0.9 || g.aspect > want * 1.25) return { ok: false, ask: CARD_ASK, card: g };
+  if (g.aspect < want * 0.9 || g.aspect > want * 1.35) return { ok: false, ask: CARD_ASK, card: g };
   // Card standing on end (long edge up and down) — the eyes are then found off to the side.
   if (Math.abs(g.longDir[1]) > Math.abs(g.longDir[0])) return { ok: false, ask: 'Turn the card so its long edge runs left to right across your forehead, and send one more.' };
   // Card running off the side of the photo: the cut edge looks like a real edge, so refuse it.
@@ -184,6 +186,8 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   // How sure we are of that angle: about 1.5 px of outline error on the short sides.
   const yawSigma = D ? Math.asin(Math.min(1, ((1.5 / g.shortPx) * D) / CARD.long)) / DEG : null;
   const tipDeg = D ? Math.asin(Math.min(1, ((g.tipRatio - 1) * D) / CARD.short)) / DEG : null;
+  // An end of the card hidden by hair (a straight cut) shortens it without leaving a corner gap.
+  if (yawDeg != null && g.aspect < want * Math.cos(yawDeg * DEG) * 0.97) return { ok: false, ask: 'An end of the card looks covered or cut off. ' + CARD_ASK, card: g };
   if (yawDeg != null && yawDeg > 20) return { ok: false, ask: 'Face the camera straight on and send one more.' };
 
   const pair = pickEyes(eyes, g, k(DEPTH.eye));
@@ -203,9 +207,11 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
   const noseF = widthOf(nose, DEPTH.nose), mouthF = widthOf(mouth, DEPTH.mouth);
   // Eyebrows taken for eyes sit far above the nose: eye line to nose center is ~0.4–0.65 of the
   // eye spacing on real faces, eyebrows push it well past that.
+  let browRisk = false;
   if (noseF) {
     const drop = Math.abs(dotp(sub(noseF.c, pair.a.px), [-ue[1], ue[0]])) / len(eyeVec);
-    if (drop > 0.8) return { ok: false, ask: 'I couldn’t find both eyes clearly. Face the camera straight on in good light and send one more.' };
+    if (drop > 0.75) return { ok: false, ask: 'I couldn’t find both eyes clearly. Face the camera straight on in good light and send one more.' };
+    browRisk = drop > 0.6;
   }
   const numbers = {
     eyeCenterDistanceMm: mm0(ipd),
@@ -217,8 +223,8 @@ export function measureFace({ card, eyes = [], nose, mouth, frame, focal35 = nul
 
   const fixes = [];
   let confidence = 'good';
-  if (yawDeg != null && yawDeg - yawSigma > 6) { confidence = 'low'; fixes.push('Your head looks turned a little: face the camera straight on and send one more.'); }
-  if (pair.a.w > 34 || pair.b.w > 34) { confidence = 'low'; fixes.push('The eyes came out wider than usual (eyebrows may have been picked up): face the camera in good, even light and send one more.'); }
+  if (yawDeg != null && yawDeg - yawSigma > 6) { confidence = 'low'; fixes.push('Your head looks turned or tilted a little: face the camera straight on and send one more.'); }
+  if (browRisk || pair.a.w > 34 || pair.b.w > 34) { confidence = 'low'; fixes.push('The eyes may have been mixed up with the eyebrows: face the camera in good, even light and send one more.'); }
   if (tipDeg != null && tipDeg > 30) { confidence = 'low'; fixes.push('Hold the phone at eye height; the card looks tilted.'); }
   if (!D) fixes.push('Phone distance unknown, so depth correction was skipped.');
 
