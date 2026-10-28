@@ -13,7 +13,7 @@ import { business } from './business.js';
 import * as engine from './engine.js';
 import { handleMessage, addNote, getThread } from './agent.js';
 import { quoteFromPhoto, photoReply } from './photo.js';
-import { hasKey, transcribeWav, openRealtimeTranscription, SPARK } from './muse.js';
+import { hasKey, transcribeWav, openRealtimeTranscription, SPARK, BASE_URL, DIRECT_URL, RELAY_URL, relayHeaders } from './muse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const app = express();
@@ -77,14 +77,17 @@ const route = (r) => r.headers.get('x-route') || null;
 // Which models this key can reach (names only; the key is never returned).
 app.get('/api/diag', safe(async (req, res) => {
   if (!hasKey()) return res.json({ mode: 'demo' });
-  const r = await fetch(`${process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1'}/models`, { headers: { Authorization: `Bearer ${process.env.MODEL_API_KEY}` } });
+  // ?direct=1 skips the relay so the two paths can be compared.
+  const direct = Boolean(req.query.direct) || !RELAY_URL;
+  const base = direct ? DIRECT_URL : BASE_URL;
+  const extra = direct ? {} : relayHeaders();
+  const r = await fetch(`${base}/models`, { headers: { ...extra, Authorization: `Bearer ${process.env.MODEL_API_KEY}` } });
   const text = await r.text();
   let ids = null;
   try { ids = (JSON.parse(text).data || []).map((m) => m.id); } catch {}
   const probes = [];
   if (req.query.probe) {
-    const base = process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1';
-    const h = { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' };
+    const h = { ...extra, Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' };
     for (const model of ['muse-spark-1.3', 'muse-spark-1.2', 'muse-wonder-1.0']) {
       const c = await fetch(`${base}/chat/completions`, { method: 'POST', headers: h, body: JSON.stringify({ model, messages: [{ role: 'user', content: 'Say OK' }], max_completion_tokens: 50 }) });
       probes.push({ api: 'chat', model, status: c.status, at: new Date().toISOString(), requestId: reqId(c), route: route(c), body: (await c.text()).slice(0, 160) });
@@ -92,9 +95,8 @@ app.get('/api/diag', safe(async (req, res) => {
       probes.push({ api: 'responses', model, status: x.status, at: new Date().toISOString(), requestId: reqId(x), route: route(x), body: (await x.text()).slice(0, 160) });
     }
   }
-  // Response header names (not values) from /models, so we can see where Meta puts its request ID.
   const headerNames = [...r.headers.keys()];
-  res.json({ status: r.status, at: new Date().toISOString(), requestId: reqId(r), route: route(r), headerNames, models: ids, raw: ids ? undefined : text.slice(0, 400), spark: SPARK, probes });
+  res.json({ via: direct ? 'direct' : 'relay', status: r.status, at: new Date().toISOString(), requestId: reqId(r), route: route(r), relayed: r.headers.get('x-relayed-by'), headerNames, models: ids, raw: ids ? undefined : text.slice(0, 400), spark: SPARK, probes });
 }));
 
 // ---- text ----

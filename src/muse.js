@@ -4,7 +4,12 @@
 
 import OpenAI from 'openai';
 
-export const BASE_URL = process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1';
+export const DIRECT_URL = process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1';
+// Optional relay (relay/meta-relay.ts on Supabase) for hosts Meta's API turns away. When
+// META_RELAY_URL and META_RELAY_KEY are set, every REST call goes through it; realtime voice stays direct.
+export const RELAY_URL = process.env.META_RELAY_URL || '';
+export const BASE_URL = RELAY_URL || DIRECT_URL;
+export const relayHeaders = () => (RELAY_URL && process.env.META_RELAY_KEY ? { 'x-relay-key': process.env.META_RELAY_KEY } : {});
 export const SPARK = process.env.MUSE_SPARK_MODEL || 'muse-spark-1.3';
 export const SAM = 'sam-3.1';
 export const TRANSCRIBE = 'muse-voice-transcribe-1.0';
@@ -13,7 +18,7 @@ export const hasKey = () => Boolean(process.env.MODEL_API_KEY);
 
 let client;
 function api() {
-  if (!client) client = new OpenAI({ baseURL: BASE_URL, apiKey: process.env.MODEL_API_KEY, timeout: 60_000, maxRetries: 2 });
+  if (!client) client = new OpenAI({ baseURL: BASE_URL, apiKey: process.env.MODEL_API_KEY, defaultHeaders: relayHeaders(), timeout: 60_000, maxRetries: 2 });
   return client;
 }
 
@@ -47,7 +52,7 @@ export async function sparkReadPhoto({ dataUrl, prompt, schema }) {
 export async function samSegment({ dataUrl, concept }) {
   const res = await fetch(`${BASE_URL}/responses`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
+    headers: { ...relayHeaders(), Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: SAM,
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: concept }, { type: 'input_image', image_url: dataUrl }] }],
@@ -88,7 +93,7 @@ export async function transcribeWav(wavBuffer) {
   form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'voicemail.wav');
   const res = await fetch(`${BASE_URL}/asr/transcribe`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, Accept: 'text/plain' },
+    headers: { ...relayHeaders(), Authorization: `Bearer ${process.env.MODEL_API_KEY}`, Accept: 'text/plain' },
     body: form,
   });
   if (!res.ok) throw new Error(`Transcribe ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -99,7 +104,7 @@ export async function transcribeWav(wavBuffer) {
 export async function museImageEdit({ dataUrl, prompt }) {
   const res = await fetch(`${BASE_URL}/images/edits`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
+    headers: { ...relayHeaders(), Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'muse-image-1.0', prompt, images: [{ image_url: dataUrl }], n: 1, output_format: 'jpeg' }),
   });
   if (!res.ok) throw new Error(`Muse Image ${res.status}: ${(await res.text()).slice(0, 300)}`);
@@ -114,7 +119,7 @@ export async function museImageEdit({ dataUrl, prompt }) {
 // the browser streams 24 kHz 16-bit mono PCM to us and we relay it.
 export async function openRealtimeTranscription({ onEvent, onClose, mode = 'ENDPOINTING' }) {
   const { default: WebSocket } = await import('ws');
-  const url = `${BASE_URL.replace(/^http/, 'ws')}/asr/realtime?sessionId=fa-${Date.now()}`;
+  const url = `${DIRECT_URL.replace(/^http/, 'ws')}/asr/realtime?sessionId=fa-${Date.now()}`;
   const ws = new WebSocket(url);
   await new Promise((resolve, reject) => {
     ws.once('open', resolve);
