@@ -1,4 +1,4 @@
-// Measure anything: one photo and one line of text in, an exact answer out.
+// First Answer Sight ("See it. Size it. Solve it."): one photo and one line of text in, an exact answer out.
 //
 //   1. Muse Spark reads the photo and the message: what is being asked (shoe size? will it fit?
 //      repair or replace?), what to measure, and which everyday ruler is in the shot.
@@ -12,6 +12,7 @@ import { measureFlat, FLAT_REFERENCES, maskBoundary } from './flat.js';
 import { best } from './measure.js';
 import { calibrate, gapBetween, heightOf, distanceTo, contactPoints, fitCheck, ftIn, UPRIGHT } from './distance.js';
 import { plan as tilePlan } from './tiles.js';
+import { measureFace, faceLabel, NOTE as FACE_NOTE } from './face.js';
 import { decodeMaskToSVGPath } from '@meta-sam/parser';
 
 export const TASKS = ['face', 'floor_tile', 'windshield_chip', 'shoe_size', 'gap_fit', 'height', 'distance', 'size'];
@@ -78,11 +79,13 @@ export function guessFromText(text = '') {
   };
   const tile = t.match(/(\d+)\s*(?:x|by)\s*(\d+)\s*(?:in|inch|")?\s*tile/) || t.match(/tile[^\d]*(\d+)\s*(?:x|by)\s*(\d+)/);
   let task = 'size';
-  if (/shoe|foot|feet size|what size am i/.test(t)) task = 'shoe_size';
+  const notFace = /face ?mask|face ?shield|face ?plate|face ?frame|eye ?bolt|thermometer|eye[- ]level|eye height|from (?:the |my )?(?:monitor|screen|face)/.test(t);
+  if (!notFace && (/\b(?:my|your|her|his|their|kid'?s|son'?s|daughter'?s)\s+(?:face|eyes?|forehead|pupils?|pd|nose|mouth)\b|between (?:my |the |your |her |his )?eyes|eye (?:spacing|distance)|\bpupils?\b|pupillary|\bipd\b|p\.d\.|\bpd measurement|face symmetr|^\s*(?:measure|what(?:'s| is))\s+my\s+pd\b/.test(t)
+    || /symmetr/.test(t) && /\b(?:my|your) (?:face|eyes)\b/.test(t))) task = 'face';
+  else if (/shoe|foot|feet size|what size am i/.test(t)) task = 'shoe_size';
   else if (/windshield|chip|crack in (?:the )?glass|repair or replace/.test(t)) task = 'windshield_chip';
   else if (/tile|floor/.test(t)) task = 'floor_tile';
   else if (/\bfit\b|between/.test(t)) task = 'gap_fit';
-  else if (/face|symmetr|proportion|forehead/.test(t)) task = 'face';
   else if (/how tall|height/.test(t)) task = 'height';
   else if (/how far|distance/.test(t)) task = 'distance';
   return {
@@ -224,7 +227,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   if (read.ruler === 'none') read.ruler = DEFAULT_RULER[read.task];
 
   if (!live) return finishErr(read, pipeline, 'Measuring needs the Meta models switched on for this server.');
-  if (read.task === 'face') return finishErr(read, pipeline, 'Face measuring is being added next.', 'face');
+  if (read.task === 'face') return faceFlow({ dataUrl, live, read, pipeline, focal35 });
 
   // 2. Outline the target(s) and the ruler at the same time.
   const upright = Boolean(UPRIGHT_CONCEPT[read.ruler]);
@@ -373,6 +376,53 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
     numbers: [{ label: 'Length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'Width', value: inchStr(m.widthMm) }, { label: 'Area', value: `${m.areaIn2} sq in` }],
     shopping: [], steps: ['Send the same shot again later to see if it changed.'],
     confidence: m.confidence, ask: tips,
+  });
+}
+
+// Face: SAM outlines the card, the face, both eyes, the nose and the mouth at once.
+async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
+  const concepts = ['card', 'eye', 'nose', 'mouth'];
+  let segs;
+  try {
+    segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
+  } catch (e) {
+    pipeline.push({ model: 'sam-3.1', step: 'outline the face', error: String(e.message).slice(0, 200) });
+    return finishErr(read, pipeline, 'Couldn’t outline the photo just now; please send it again.', 'face');
+  }
+  const [cardS, eyeS, noseS, mouthS] = segs;
+  const frame = cardS.frame || eyeS.frame || noseS.frame;
+  const card = best(cardS.objects), nose = best(noseS.objects), mouth = best(mouthS.objects);
+  // Every 'eye' SAM returns (maybe eyebrows or glasses too); face.js picks the real pair by shape and position.
+  const eyes = eyeS.objects.filter((o) => o.c == null || o.c >= 0.3).sort((a, b) => (b.c ?? 1) - (a.c ?? 1)).slice(0, 8);
+  pipeline.push({ model: 'sam-3.1', step: 'outline: card, eyes, nose, mouth', result: { card: cardS.objects.length, eyes: eyeS.objects.length, nose: noseS.objects.length, mouth: mouthS.objects.length } });
+  const overlay = { frame, outlines: [outlineOf(card, 'gift card', 'ruler')].filter(Boolean), lines: [] };
+  const f = measureFace({ card, eyes, nose, mouth, frame, focal35 });
+  pipeline.push({ model: 'first-answer math', step: 'scale the face with the card', result: f.ok ? { confidence: f.confidence, phoneDistanceMm: f.distanceMm, headTurnDeg: f.yawDeg } : f.ask });
+  if (!f.ok) return finishErr(read, pipeline, f.ask, 'face', overlay);
+  for (const e of f.eyeObjects) overlay.outlines.push(outlineOf(e, 'eye', 'target'));
+  for (const [o, l] of [[nose, 'nose'], [mouth, 'mouth']]) if (o) overlay.outlines.push(outlineOf(o, l, 'target'));
+  overlay.lines.push({ from: f.eyeCentersPx[0], to: f.eyeCentersPx[1], label: `${f.numbers.eyeCenterDistanceMm} mm` });
+  const mmIn = (v) => (v == null ? null : `${v} mm (${(v / 25.4).toFixed(2)} in)`);
+  const sy = f.symmetry;
+  let symLine;
+  if (!sy) symLine = f.numbers.noseWidthMm == null ? ' A left-right comparison needs the nose clearly in the shot.' : '';
+  else {
+    const mid = sy.midlineSame
+      ? 'Both eyes sit about the same distance from the midline of the nose (within what one photo can show)'
+      : `The eyes sit ${sy.leftEyeToMidlineMm} mm (photo left) and ${sy.rightEyeToMidlineMm} mm (photo right) from the midline of the nose`;
+    const wid = sy.widthSame ? 'and the eye widths are about the same.' : `and the eye widths differ by ${sy.eyeWidthDifferenceMm} mm.`;
+    symLine = ` ${mid}, ${wid}`;
+  }
+  return finish({
+    task: 'face', read, overlay, pipeline,
+    headline: `Eye centers ${f.numbers.eyeCenterDistanceMm} mm apart`,
+    answer: `Measured against the gift card on your forehead${f.distanceMm ? `, phone about ${Math.round(f.distanceMm / 25.4)} in away` : ''}.${symLine}`,
+    numbers: Object.entries(f.numbers).filter(([, v]) => v != null).map(([k, v]) => ({ label: faceLabel(k), value: mmIn(v) })),
+    shopping: [],
+    steps: ['Face the camera straight on, phone at eye height, about a foot to arm’s length away.', 'Good, even light; glasses off.', 'One photo is good to about ±5% for eye spacing; nose and mouth are rough.'],
+    confidence: f.confidence,
+    ask: f.fixes.length ? f.fixes.join(' ') : null,
+    note: FACE_NOTE,
   });
 }
 

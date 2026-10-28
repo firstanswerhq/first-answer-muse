@@ -1,4 +1,4 @@
-// Measure Anything: text one photo, get a measurement back.
+// First Answer Sight ("See it. Size it. Solve it."): text one photo, get a measurement back.
 // Muse Spark reads the photo, SAM 3.1 outlines the objects, our math turns
 // pixels into inches using an everyday object in the shot as the ruler.
 
@@ -11,7 +11,7 @@ const FALLBACK_ERR = "Couldn't measure that one — try again with a gift card, 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 const SAMPLES = [
-  { id: 'face', label: 'Face', text: 'Gift card on my forehead. How wide is my face, and what size glasses frame fits?' },
+  { id: 'face', label: 'Face', text: 'Gift card flat on my forehead. Measure my eye spacing.' },
   { id: 'tile', label: 'Tile floor', text: 'How much tile do I need for this floor? There is a sheet of paper on it for scale.' },
   { id: 'windshield', label: 'Windshield chip', text: 'Repair or replace this chip? I put a quarter next to it.' },
   { id: 'shoe', label: 'Shoe size', text: 'What shoe size am I? My foot is on a sheet of paper.' },
