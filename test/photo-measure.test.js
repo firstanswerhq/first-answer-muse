@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { scene } from './scene.js';
 
 process.env.MODEL_API_KEY = 'test-not-a-real-key';
+process.env.META_RELAY_URL = 'direct';
 const s = scene({ drive: { x0: -9, x1: 9, z0: 16, z1: 40 }, door: { x0: -8, x1: 8, z: 40 } }); // 18 x 24 ft = 432 sq ft
 const calls = [];
 const realFetch = globalThis.fetch;

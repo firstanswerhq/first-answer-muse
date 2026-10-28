@@ -7,7 +7,10 @@ import OpenAI from 'openai';
 export const DIRECT_URL = process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1';
 // Optional relay (relay/meta-relay.ts on Supabase) for hosts Meta's API turns away. When
 // META_RELAY_URL is set, every REST call goes through it; realtime voice stays direct.
-export const RELAY_URL = process.env.META_RELAY_URL || '';
+// Default: First Answer's relay. Set META_RELAY_URL=direct to call Meta directly again once Meta fixes hosted access.
+const DEFAULT_RELAY = 'https://kqgbohllsbwpvigkhpmr.supabase.co/functions/v1/meta-relay';
+const relaySetting = process.env.META_RELAY_URL ?? DEFAULT_RELAY;
+export const RELAY_URL = relaySetting === 'direct' || relaySetting === '' ? '' : relaySetting;
 export const BASE_URL = RELAY_URL || DIRECT_URL;
 export const relayHeaders = () => (RELAY_URL && process.env.META_RELAY_KEY ? { 'x-relay-key': process.env.META_RELAY_KEY } : {}); // optional extra gate
 export const SPARK = process.env.MUSE_SPARK_MODEL || 'muse-spark-1.3';
