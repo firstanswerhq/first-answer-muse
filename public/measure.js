@@ -98,8 +98,8 @@ $('photoIn').addEventListener('change', (e) => {
 });
 
 // ---------- waiting chips ----------
-function working() {
-  const el = bubble('them', `<ol class="pipe">${WAIT_STEPS.map(([k, name, what]) => `<li><span class="spin"></span><span class="mtag ${k}">${name}</span>${what}</li>`).join('')}</ol>`, 'working');
+function working(dataUrl) {
+  const el = bubble('them', `${dataUrl ? `<div class="scan"><img src="${dataUrl}" alt=""><span class="beam"></span></div>` : ''}<ol class="pipe">${WAIT_STEPS.map(([k, name, what]) => `<li><span class="spin"></span><span class="mtag ${k}">${name}</span>${what}</li>`).join('')}</ol>`, 'working');
   const items = [...el.querySelectorAll('li')];
   let i = 0;
   items[0].classList.add('on');
@@ -149,13 +149,15 @@ function annotatedShot(dataUrl, overlay) {
       p.setAttribute('transform', `translate(${b.x1} ${b.y1}) scale(${(b.x2 - b.x1 + 1) / o.w} ${(b.y2 - b.y1 + 1) / o.h})`);
       p.setAttribute('vector-effect', 'non-scaling-stroke');
       p.setAttribute('class', isRuler ? 'o-ruler' : 'o-target');
-      p.style.animationDelay = `${i * 120}ms`;
+      p.setAttribute('pathLength', '1');
+      p.style.animationDelay = `${500 + i * 160}ms`;
       svg.appendChild(p);
     } else {
       const r = document.createElementNS(SVGNS, 'rect');
       Object.entries({ x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1, rx: 4 }).forEach(([k, v]) => r.setAttribute(k, v));
       r.setAttribute('vector-effect', 'non-scaling-stroke');
       r.setAttribute('class', isRuler ? 'o-ruler' : 'o-target');
+      r.setAttribute('pathLength', '1');
       svg.appendChild(r);
     }
     const label = o.label || (isRuler ? 'reference' : 'target');
@@ -173,12 +175,25 @@ function annotatedShot(dataUrl, overlay) {
     const len = Math.hypot(x2 - x1, y2 - y1) || 1;
     const nx = (-(y2 - y1) / len) * tick;
     const ny = ((x2 - x1) / len) * tick;
-    const d = `M${x1} ${y1}L${x2} ${y2}M${x1 - nx} ${y1 - ny}L${x1 + nx} ${y1 + ny}M${x2 - nx} ${y2 - ny}L${x2 + nx} ${y2 + ny}`;
     const p = document.createElementNS(SVGNS, 'path');
-    p.setAttribute('d', d);
+    p.setAttribute('d', `M${x1} ${y1}L${x2} ${y2}`);
+    p.setAttribute('pathLength', '1');
     p.setAttribute('vector-effect', 'non-scaling-stroke');
     p.setAttribute('class', 'm-line');
     svg.appendChild(p);
+    // Graduations along the line, like a tape: end caps, a tall tick every quarter, short ones between.
+    const N = 16;
+    let td = `M${x1 - nx * 1.4} ${y1 - ny * 1.4}L${x1 + nx * 1.4} ${y1 + ny * 1.4}M${x2 - nx * 1.4} ${y2 - ny * 1.4}L${x2 + nx * 1.4} ${y2 + ny * 1.4}`;
+    for (let k = 1; k < N; k++) {
+      const f = k / N, h = k % 4 === 0 ? 0.9 : 0.45;
+      const cx = x1 + (x2 - x1) * f, cy = y1 + (y2 - y1) * f;
+      td += `M${cx} ${cy}L${cx + nx * h} ${cy + ny * h}`;
+    }
+    const t2 = document.createElementNS(SVGNS, 'path');
+    t2.setAttribute('d', td);
+    t2.setAttribute('vector-effect', 'non-scaling-stroke');
+    t2.setAttribute('class', 'm-ticks');
+    svg.appendChild(t2);
     if (l.label) {
       const t = document.createElement('span');
       t.className = 'len';
@@ -225,11 +240,27 @@ function renderReply(r, dataUrl) {
   if (pipe.length) {
     const sec = document.createElement('div');
     sec.className = 'r-pipe';
-    sec.innerHTML = `<h4>How it was measured</h4><ol>${pipe.map((p) => {
+    sec.innerHTML = `<h4>How Meta's models measured it</h4><ol>${pipe.map((p) => {
       const [k, name] = modelInfo(p.model);
       return `<li><span class="mtag ${k}">${esc(name)}</span><span>${esc(p.step || '')}${p.result ? ` <em>· ${esc(p.result)}</em>` : ''}</span></li>`;
     }).join('')}</ol>`;
     el.appendChild(sec);
+  }
+  // The readout counts up to the measured number once the photo has been traced.
+  const head = el.querySelector('.r-head');
+  const m = head && head.textContent.match(/\d+(?:\.\d+)?/);
+  if (m && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const full = head.textContent, target = parseFloat(m[0]), dec = (m[0].split('.')[1] || '').length;
+    const before = full.slice(0, m.index), after = full.slice(m.index + m[0].length);
+    const t0 = performance.now() + (hasOverlay ? 1300 : 0), dur = 900;
+    head.textContent = before + (0).toFixed(dec) + after;
+    const tickFn = (now) => {
+      const k = Math.min(1, Math.max(0, (now - t0) / dur));
+      const e = 1 - Math.pow(1 - k, 3);
+      head.textContent = before + (target * e).toFixed(dec) + after;
+      if (k < 1) requestAnimationFrame(tickFn); else head.textContent = full;
+    };
+    requestAnimationFrame(tickFn);
   }
   // Land on the top of the reply so the measured photo is in view.
   const toReply = () => {
@@ -251,7 +282,7 @@ async function send(blob, text) {
     const [dataUrl, exifB64] = await Promise.all([toDataUrl(blob), headB64(blob).catch(() => null)]);
     bubble('me', `<img src="${dataUrl}" alt="Photo sent">`, 'photo');
     if (text) bubble('me', esc(text));
-    wait = working();
+    wait = working(dataUrl);
     let r = null;
     try {
       const res = await fetch('/api/measure', {
