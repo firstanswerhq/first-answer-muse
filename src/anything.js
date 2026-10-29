@@ -151,6 +151,25 @@ const inchStr = (mm) => {
   return `${(Math.round(inch * 4) / 4).toString()} in`;
 };
 
+// What the answer was measured against, in words: "quarter (24.26 mm)", "sheet of printer paper (11 × 8.5 in)".
+export function rulerSpec(refKind) {
+  const F = FLAT_REFERENCES[refKind];
+  if (F) {
+    if (F.shape === 'circle') return `${F.label} (${F.diameter} mm)`;
+    if (F.long < 100) return `${F.label} (${F.long} × ${F.short} mm)`;
+    const i = (mm) => String(Math.round((mm / 25.4) * 100) / 100);
+    return `${F.label} (${i(F.long)} × ${i(F.short)} in)`;
+  }
+  const S = SURFACE_REFERENCES[refKind];
+  if (S) return Number.isInteger(S.heightFt) ? `${S.label} (${S.widthFt} × ${S.heightFt} ft)` : `${S.label} (${Math.round(S.widthFt * 12)} × ${Math.round(S.heightFt * 12)} in)`;
+  const U = UPRIGHT[refKind];
+  if (U) return `${U.label} (${Math.round(U.heightFt * 12)} in tall)`;
+  return refKind;
+}
+
+// A measured length with its ± range, in inches: "0.5 – 0.63 in".
+const rangeIn = (mm, pm) => `${inchStr(Math.max(0, mm - pm))} – ${inchStr(mm + pm)}`;
+
 // ---------- pictures for the page ----------
 
 function outlineOf(obj, label, role) {
@@ -268,6 +287,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
     const cal = calibrate({ frame, focal35, ref: upright ? ruler : null, refKind: upright ? read.ruler : null, groundLines: [contactPoints(target, frame), ...(other ? [contactPoints(other, frame)] : [])] });
     pipeline.push({ model: 'first-answer math', step: 'set up the camera from the photo', result: { how: cal.how, confidence: cal.confidence, cameraHeightFt: cal.primary && +cal.primary.height.toFixed(1), notes: cal.notes } });
     if (!cal.ok) return finishErr(read, pipeline, cal.ask, null, overlay);
+    base.measuredAgainst = upright && ruler && cal.how.includes('reference') ? rulerSpec(read.ruler) : 'a typical phone height (no door in the shot)';
     if (read.task === 'gap_fit') {
       if (!other) return finishErr(read, pipeline, `I found the ${concepts[0]} but not the ${concepts[2]}. Step back so both are in the shot.`, null, overlay);
       const g = gapBetween(target, other, cal, frame);
@@ -312,6 +332,8 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   pipeline.push({ model: 'first-answer math', step: `measure against the ${FLAT_REFERENCES[refKind].label}`, result: m });
   if (!m.ok) return finishErr(read, pipeline, m.reason, null, overlay);
   const line = longestLine(target);
+  base.measuredAgainst = rulerSpec(refKind);
+  const pm = m.plusMinusMm, pmPct = Math.round(m.plusMinusPct * 100);
 
   if (read.task === 'shoe_size') {
     const s = shoeSize(m.lengthMm, read.shoe_for);
@@ -323,7 +345,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
       ...base,
       headline: `Size ${s.pick}`,
       answer: `Your foot is ${inchStr(m.lengthMm)} long (${(m.lengthMm / 10).toFixed(1)} cm). That’s a US ${s.pick}, about EU ${s.eu}.`,
-      numbers: [{ label: 'Foot length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'US men’s', value: String(s.men) }, { label: 'US women’s', value: String(s.women) }, { label: 'EU', value: String(s.eu) }],
+      numbers: [{ label: 'Foot length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'Range', value: `${rangeIn(m.lengthMm, pm)} (±${pmPct}%)` }, { label: 'US men’s', value: String(s.men) }, { label: 'US women’s', value: String(s.women) }, { label: 'EU', value: String(s.eu) }],
       shopping: [], steps: ['Measure both feet and go by the bigger one.', 'Feet swell a little by evening; measure then if you can.', 'Between sizes, go half a size up.'],
       confidence: m.confidence, ask: m.notes.length ? m.notes.join('; ') : null,
     });
@@ -336,10 +358,11 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
       ...base,
       headline: v.repair ? 'Repair it' : 'Replace it',
       answer: v.text,
-      numbers: [{ label: v.kind === 'crack' ? 'Crack length' : 'Chip size', value: inchStr(m.lengthMm) }, { label: 'Repair limit', value: v.kind === 'crack' ? '6 in' : '1 in (a quarter)' }],
+      numbers: [{ label: v.kind === 'crack' ? 'Crack length' : 'Chip size', value: inchStr(m.lengthMm) }, { label: 'Range', value: `${rangeIn(m.lengthMm, pm)} (±${pmPct}%)` }, { label: 'Repair limit', value: v.kind === 'crack' ? '6 in' : '1 in (a quarter)' }],
       shopping: v.repair ? ['Windshield chip repair (many insurers cover it — check your policy)'] : ['Windshield replacement'],
       steps: v.repair ? ['Put clear tape over it to keep dirt out.', 'Skip the car wash and blasting the defroster until it’s fixed.', 'Get it repaired soon — chips spread with heat and bumps.'] : ['Get two quotes; ask if your insurance covers glass.', 'If your car has lane or collision cameras, ask about recalibration.'],
-      confidence: m.confidence, ask: m.notes.length ? m.notes.join('; ') : null,
+      confidence: m.confidence,
+      ask: [...m.notes, ...(Math.abs(m.lengthMm - (v.kind === 'crack' ? 152.4 : 25.4)) <= pm ? ['It’s within measuring error of the repair limit, so have a shop look before deciding.'] : [])].join('; ') || null,
     });
   }
 
@@ -354,7 +377,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
       ...base,
       headline: `Buy ${p.buyTiles} tiles`,
       answer: `The floor is about ${ftIn(roomW / 12)} by ${ftIn(roomL / 12)} (${p.room.sqft} sq ft). In ${tw} × ${tl} in tile that’s ${p.tilesForFloor} tiles laid, plus ${p.extraPct}% extra for cuts and mistakes: buy ${p.buyTiles}.`,
-      numbers: [{ label: 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: 'Area', value: `${p.room.sqft} sq ft` }, { label: 'Full tiles', value: String(p.fullTiles) }, { label: 'Buy', value: `${p.buyTiles} tiles (+${p.extraPct}%)` }],
+      numbers: [{ label: 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: 'Area', value: `${p.room.sqft} sq ft` }, { label: 'Range', value: `${Math.round(p.room.sqft * (1 - 2 * m.plusMinusPct))} – ${Math.round(p.room.sqft * (1 + 2 * m.plusMinusPct))} sq ft (±${2 * pmPct}%)` }, { label: 'Full tiles', value: String(p.fullTiles) }, { label: 'Buy', value: `${p.buyTiles} tiles (+${p.extraPct}%)` }],
       shopping: [`${p.buyTiles} tiles, ${tw} × ${tl} in (same lot number on every box)`, 'Thinset mortar and a notched trowel (ask the store which notch fits your tile)', 'Grout and 1/8 in spacers', 'Tile cutter or wet saw'],
       steps: [`Start at the center of the room: ${p.layout.across} across, ${p.layout.along} along.`, ...p.cuts.map((c) => `${c.count} × ${c.what}: ${c.cut}.`), 'Tape-measure one wall before the first cut.'],
       confidence: m.confidence === 'good' ? 'fair' : m.confidence,
@@ -375,7 +398,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
       ...base,
       headline: sq ? `${inchStr(m.rectLengthMm)} square` : `${inchStr(m.rectLengthMm)} × ${inchStr(m.rectWidthMm)}`,
       answer: `${cap(concepts[0])}: ${inchStr(m.rectLengthMm)} × ${inchStr(m.rectWidthMm)} (${(m.rectLengthMm / 10).toFixed(1)} × ${(m.rectWidthMm / 10).toFixed(1)} cm), measured against the ${m.ruler}.`,
-      numbers: [{ label: 'Long side', value: `${inchStr(m.rectLengthMm)} · ${(m.rectLengthMm / 10).toFixed(1)} cm` }, { label: 'Short side', value: `${inchStr(m.rectWidthMm)} · ${(m.rectWidthMm / 10).toFixed(1)} cm` }, { label: 'Area', value: `${m.areaIn2} sq in` }],
+      numbers: [{ label: 'Long side', value: `${inchStr(m.rectLengthMm)} · ${(m.rectLengthMm / 10).toFixed(1)} cm` }, { label: 'Short side', value: `${inchStr(m.rectWidthMm)} · ${(m.rectWidthMm / 10).toFixed(1)} cm` }, { label: 'Accuracy', value: `±${inchStr(m.rectLengthMm * m.plusMinusPct)} (±${pmPct}%)` }, { label: 'Area', value: `${m.areaIn2} sq in` }],
       shopping: [], steps: ['Send the same shot again later to see if it changed.'],
       confidence: m.confidence, ask: tips,
     });
@@ -385,7 +408,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
     ...base,
     headline: `${inchStr(m.lengthMm)} long`,
     answer: `${cap(concepts[0])}: ${inchStr(m.lengthMm)} long, about ${inchStr(m.widthMm)} wide, ${m.areaIn2} sq in, measured against the ${m.ruler}.`,
-    numbers: [{ label: 'Length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'Width', value: inchStr(m.widthMm) }, { label: 'Area', value: `${m.areaIn2} sq in` }],
+    numbers: [{ label: 'Length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'Range', value: `${rangeIn(m.lengthMm, pm)} (±${pmPct}%)` }, { label: 'Width', value: inchStr(m.widthMm) }, { label: 'Area', value: `${m.areaIn2} sq in` }],
     shopping: [], steps: ['Send the same shot again later to see if it changed.'],
     confidence: m.confidence, ask: tips,
   });
@@ -426,7 +449,7 @@ async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
     symLine = ` ${mid}, ${wid}`;
   }
   return finish({
-    task: 'face', read, overlay, pipeline,
+    task: 'face', read, overlay, pipeline, measuredAgainst: rulerSpec('card'),
     headline: `Eye centers ${f.numbers.eyeCenterDistanceMm} mm apart`,
     answer: `Measured against the gift card on your forehead${f.distanceMm ? `, phone about ${Math.round(f.distanceMm / 25.4)} in away` : ''}.${symLine}`,
     numbers: Object.entries(f.numbers).filter(([, v]) => v != null).map(([k, v]) => ({ label: faceLabel(k), value: mmIn(v) })),
@@ -483,7 +506,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
   const sizeWords = m.widthFt && m.lengthFt ? ` (about ${m.widthFt} ft wide by ${m.lengthFt} ft long)` : '';
   const answer = `Your ${concepts[0]} is about ${fmt(m.sqft)} sq ft${sizeWords}, between ${fmt(m.low)} and ${fmt(m.high)} sq ft, measured against the ${R.label}. ${seal.length === 1 ? `Buy ${seal[0].qty} ${seal[0].qty === 1 ? seal[0].unit : `${seal[0].unit}s`} of ${seal[0].kind} sealer per coat.` : `That’s ${seal[0].qty} gallons of concrete sealer or ${seal[1].qty} five-gallon pails of asphalt sealer per coat.`}`;
   return finish({
-    task: 'surface_area', read, overlay, pipeline,
+    task: 'surface_area', read, overlay, pipeline, measuredAgainst: rulerSpec(refKind),
     headline: `About ${fmt(m.sqft)} sq ft`,
     answer,
     numbers: [

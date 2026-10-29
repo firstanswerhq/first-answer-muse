@@ -359,9 +359,22 @@ export function measureFlat({ target, ref, refKind }) {
   if (clipped) { confidence = 'low'; notes.push('part of it runs off the edge of the photo; step back so all of it is in the shot'); }
   if (refKind === 'soda_can') notes.push('measured at the can\'s distance; best for things standing beside it');
 
+  // How far off it can be: the ruler's own fit (corners pin a rectangle better than a coin's oval), a
+  // steep coin, a low-confidence shot, and never finer than about a pixel and a half at the target.
+  let pct = R.shape === 'rect' ? 0.03 : 0.04;
+  if (R.shape === 'circle' && map.tiltDeg > 30) pct += 0.02;
+  if (confidence === 'low') pct += 0.08;
+  let cx = 0, cy = 0;
+  for (const [x, y] of tm.pts) { cx += x; cy += y; }
+  const mmPerPx = Math.sqrt(Math.max(0, map.areaScale([cx / tm.pts.length, cy / tm.pts.length])));
+  const plusMinusMm = Math.max(pct * length, 1.5 * mmPerPx);
+  const plusMinusPct = length > 0 ? plusMinusMm / length : pct;
+
   const r1 = (x) => Math.round(x * 10) / 10;
   return {
     ok: area > 0,
+    plusMinusPct: Math.round(plusMinusPct * 1000) / 1000,
+    plusMinusMm: r1(plusMinusMm),
     areaMm2: Math.round(area),
     areaIn2: r1(area / (MM_PER_IN * MM_PER_IN)),
     lengthMm: r1(length),
