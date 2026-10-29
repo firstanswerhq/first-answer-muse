@@ -173,6 +173,9 @@ Every commit in this repository is from the hackathon window; the first is Oct 2
 | Oct 28 | Send to the business for real: leads on the owner board, priced from the price list | `261112f` |
 | Oct 28 | Muse Spark checks SAM's outlines before any number goes out; Spanish answers; SAM confidence and Spark's verdict on the photo | `11c27d4`, `e87d2f2` |
 | Oct 28 | Review pass 2 and judge fixes: locked verdict sentence and unit allowlist for Spark's wording; no numbers on refusals; public board without free text; overlay in a worker; counted retries; rightmost X-Forwarded-For; unchecked leads; Face off; Spark corrects SAM (one round); a demo business per chip; photo with masks on the owner board; Spanish cards; privacy note | `c0dbada`, `3a52295`, `fffa4e8`, `abc5589`, `df89f5a`, `5c03ee9`, `e512860`, `8d0939d`, `7ce5633`, `143d8b9`, `17c1695`, `59fc976` |
+| Oct 28 | Privacy: README and page name the Supabase relay route and what is kept in memory | `44b43c8` |
+| Oct 28 | Tile answer passes our own unit check; every chip's template is tested | `5a171ee` |
+| Oct 28 | Hundredths under an inch; owner gets the job in English for Spanish questions; Spanish outline labels | `0eaf815` |
 
 See `git log` for the full history.
 
