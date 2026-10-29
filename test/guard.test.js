@@ -17,11 +17,14 @@ const base = `http://127.0.0.1:${server.address().port}`;
 test.after(() => server.close());
 
 const tiny = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-const measure = (ip) => fetch(`${base}/api/measure`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ dataUrl: tiny, text: 'how big' }) });
+const measure = (ip, extra = {}) => fetch(`${base}/api/measure`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip, ...extra }, body: JSON.stringify({ dataUrl: tiny, text: 'how big' }) });
 
-test('client IP: cf-connecting-ip, then true-client-ip, then the RIGHTMOST x-forwarded-for, then req.ip', () => {
-  assert.equal(clientIp({ headers: { 'cf-connecting-ip': '1.1.1.1', 'true-client-ip': '2.2.2.2', 'x-forwarded-for': '3.3.3.3' }, ip: '4.4.4.4' }), '1.1.1.1');
-  assert.equal(clientIp({ headers: { 'true-client-ip': '2.2.2.2', 'x-forwarded-for': '3.3.3.3' }, ip: '4.4.4.4' }), '2.2.2.2');
+test('client IP: the RIGHTMOST x-forwarded-for, then req.ip; Cloudflare headers only when TRUST_CLOUDFLARE=1', () => {
+  // By default a caller-written cf-connecting-ip / true-client-ip is ignored.
+  assert.equal(clientIp({ headers: { 'cf-connecting-ip': '1.1.1.1', 'true-client-ip': '2.2.2.2', 'x-forwarded-for': '3.3.3.3' }, ip: '4.4.4.4' }), '3.3.3.3');
+  assert.equal(clientIp({ headers: { 'cf-connecting-ip': '1.1.1.1' }, ip: '4.4.4.4' }), '4.4.4.4');
+  assert.equal(clientIp({ headers: { 'cf-connecting-ip': '1.1.1.1', 'x-forwarded-for': '3.3.3.3' }, ip: '4.4.4.4' }, { trustCloudflare: true }), '1.1.1.1');
+  assert.equal(clientIp({ headers: { 'true-client-ip': '2.2.2.2', 'x-forwarded-for': '3.3.3.3' }, ip: '4.4.4.4' }, { trustCloudflare: true }), '2.2.2.2');
   // The caller can write anything on the left; Render appends the address it really saw.
   assert.equal(clientIp({ headers: { 'x-forwarded-for': '6.6.6.6, 3.3.3.3' }, ip: '4.4.4.4' }), '3.3.3.3');
   assert.equal(clientIp({ headers: { 'x-forwarded-for': '3.3.3.3 , ' }, ip: '4.4.4.4' }), '3.3.3.3');
@@ -38,6 +41,10 @@ test('/api/measure: 20 photos per 10 minutes per IP, then a friendly 429', async
   assert.ok(r.headers.get('retry-after'));
   // Someone else is not blocked.
   assert.notEqual((await measure('8.8.8.8')).status, 429);
+  // Rotating a fake cf-connecting-ip does not get around the limit.
+  for (let i = 0; i < 3; i++) assert.equal((await measure('9.9.9.9', { 'cf-connecting-ip': `10.0.0.${i}` })).status, 429);
+  // Nor does writing addresses to the left of the one Render appends.
+  assert.equal((await measure('7.7.7.7, 9.9.9.9')).status, 429);
 });
 
 test('the limit window slides', () => {

@@ -1,6 +1,6 @@
 // Guards for the endpoints that spend Meta credits or show customer details.
 //
-//  - clientIp(req): the caller's address behind Cloudflare / Render's proxy.
+//  - clientIp(req): the caller's address behind Render's proxy (Cloudflare headers only with TRUST_CLOUDFLARE=1).
 //  - rateLimiter({ max, windowMs }): a small in-memory sliding-window limit per IP.
 //  - tokenOk(given, expected): constant-time token check (for /api/diag and the owner board).
 //  - dailyCap / metaCalls: a global per-day cap on Meta calls.
@@ -8,18 +8,19 @@
 
 import crypto from 'node:crypto';
 
-// Cloudflare's header first (Cloudflare overwrites it), then true-client-ip, then the RIGHTMOST
-// x-forwarded-for entry: Render's proxy appends the address it saw, so anything to its left was
-// written by the caller and can be faked.
-export function clientIp(req) {
+// The RIGHTMOST x-forwarded-for entry by default: Render's proxy appends the address it saw, so
+// anything to its left was written by the caller and can be faked. Headers like cf-connecting-ip and
+// true-client-ip can be written by anyone when the app is not behind Cloudflare, so they are trusted
+// only when TRUST_CLOUDFLARE=1 says the app really sits behind Cloudflare.
+export function clientIp(req, { trustCloudflare = process.env.TRUST_CLOUDFLARE === '1' } = {}) {
   const h = (k) => {
     const v = req.headers?.[k];
     return Array.isArray(v) ? v[v.length - 1] : v;
   };
-  const cf = h('cf-connecting-ip');
-  if (cf) return String(cf).trim();
-  const tc = h('true-client-ip');
-  if (tc) return String(tc).trim();
+  if (trustCloudflare) {
+    const cf = h('cf-connecting-ip') || h('true-client-ip');
+    if (cf) return String(cf).trim();
+  }
   const xff = h('x-forwarded-for');
   if (xff) {
     const last = String(xff).split(',').map((x) => x.trim()).filter(Boolean).pop();
