@@ -106,8 +106,19 @@ export function scrub(text) {
     .replace(/\b\d{1,6}\s+(?:[A-Za-z][\w.']*\s+){1,4}(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way|pl|place|pike|cir|circle|hwy|highway|pkwy|parkway|ter|terrace|trl|trail)\b\.?/gi, '(address)');
 }
 
+// What the public board says instead of a lead's free text: "Voicemail lead · 0:42".
+const CHANNEL_LABEL = { text: 'Text lead', photo: 'Photo lead', voicemail: 'Voicemail lead', call: 'Call lead', sight: 'Sight lead' };
+export function publicLabel(l) {
+  const base = CHANNEL_LABEL[l.channel] || 'Lead';
+  const d = Number(l.durationS);
+  return Number.isFinite(d) && d > 0 ? `${base} · ${Math.floor(d / 60)}:${String(Math.round(d % 60)).padStart(2, '0')}` : base;
+}
+
 // The public owner board gets an allowlist of fields, never the whole record: a field added later
-// (a note, an address, a photo) stays private until someone decides it is safe to show.
+// (a note, an address, a photo) stays private until someone decides it is safe to show. Free text a
+// customer or the agent wrote (message summaries, voicemail text, crew notes, names) is never shown
+// publicly: scrubbing can't catch every name, gate code or address. Sight leads keep their summary,
+// which is our own measured headline, not the customer's words.
 export function redactLead(l) {
   const q = l.quote;
   return {
@@ -116,10 +127,10 @@ export function redactLead(l) {
     status: l.status,
     createdAt: l.createdAt,
     bookingId: l.bookingId || null,
-    name: firstName(l.name),
+    name: null,
     phone: maskPhone(l.phone),
-    summary: scrub(l.summary),
-    notes: scrub(l.notes),
+    summary: l.channel === 'sight' && l.sight ? l.summary : publicLabel(l),
+    notes: null,
     quote: q ? { serviceName: q.serviceName, detail: scrub(q.detail), total: q.total } : null,
     sight: l.sight ? { task: l.sight.task, job: scrub(l.sight.job), materials: (l.sight.materials || []).map(scrub), quote: scrub(l.sight.quote), measuredAgainst: l.sight.measuredAgainst || null, confidence: l.sight.confidence || null } : null,
     transcript: l.transcript ? '(voicemail transcript: owner only)' : null,

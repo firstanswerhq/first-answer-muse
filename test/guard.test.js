@@ -185,3 +185,26 @@ test('Meta calls past the cap fail fast without touching the network', async () 
     metaCalls.reset();
   }
 });
+
+test('public board: no free text from customers or the agent; a generic label instead', async () => {
+  engine.reset();
+  const vm = engine.addLead({ channel: 'voicemail', phone: '615-555-0142', summary: 'Hi, Marcus here, gate code 4417, 88 Belmont Boulevard', transcript: 'Hi, Marcus here, gate code 4417' });
+  engine.updateLead(vm.id, { durationS: 42, notes: 'Marcus Lee said the dog is out back, gate code 4417', name: 'Marcus Lee' });
+  const tx = engine.addLead({ channel: 'text', summary: 'This is Priya, my side gate code is 0099' });
+  const pub = await (await fetch(`${base}/api/owner/feed`)).json();
+  const s = JSON.stringify(pub);
+  assert.doesNotMatch(s, /Marcus|Priya|4417|0099|Belmont|dog/);
+  assert.equal(pub.leads.find((l) => l.id === vm.id).summary, 'Voicemail lead · 0:42');
+  assert.equal(pub.leads.find((l) => l.id === tx.id).summary, 'Text lead');
+  const own = await (await fetch(`${base}/api/owner/feed`, { headers: { 'x-owner-key': 'owner-secret-for-tests' } })).json();
+  assert.match(JSON.stringify(own), /gate code 4417/);
+});
+
+test('voicemail length comes from the WAV header', async () => {
+  const { wavSeconds } = await import('../src/server.js');
+  const h = Buffer.alloc(44 + 16000 * 2 * 3);
+  h.write('RIFF', 0, 'ascii'); h.writeUInt16LE(1, 22); h.writeUInt32LE(16000, 24); h.writeUInt16LE(16, 34);
+  assert.equal(wavSeconds(h), 3);
+  assert.equal(wavSeconds(Buffer.from('nope')), null);
+  assert.equal(wavSeconds(undefined), null);
+});

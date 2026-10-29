@@ -274,6 +274,15 @@ app.get('/api/measure/samples', (req, res) => {
 });
 
 // ---- voicemail ----
+// Length of a PCM WAV in seconds, from its header (for the public board's "Voicemail lead · 0:42").
+export function wavSeconds(buf) {
+  try {
+    if (!buf || buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF') return null;
+    const channels = buf.readUInt16LE(22), rate = buf.readUInt32LE(24), bits = buf.readUInt16LE(34);
+    const bytesPerSec = rate * channels * (bits / 8);
+    return bytesPerSec > 0 ? Math.round((buf.length - 44) / bytesPerSec) : null;
+  } catch { return null; }
+}
 const DEMO_VOICEMAIL = "Hi, this is Marcus over on Belmont Boulevard. I've got a two-car driveway that's covered in oil stains and I want it pressure washed before my daughter's party on the fifteenth. Call or text me back. Thanks.";
 
 app.post('/api/voicemail', deskLimit, metaBudgetGate(7, live), upload.single('audio'), safe(async (req, res) => {
@@ -287,7 +296,7 @@ app.post('/api/voicemail', deskLimit, metaBudgetGate(7, live), upload.single('au
     transcript = DEMO_VOICEMAIL;
   }
   const t = ensureLead(threadId, 'voicemail', phone, transcript.slice(0, 140));
-  engine.updateLead(t.ctx.leadId, { transcript });
+  engine.updateLead(t.ctx.leadId, { transcript, durationS: wavSeconds(req.file?.buffer) });
   broadcast('voicemail', { threadId, leadId: t.ctx.leadId, transcript });
   // The voicemail becomes the first customer message; the agent texts back from it.
   const r = await handleMessage({ threadId, text: `[VOICEMAIL from ${phone || 'unknown number'}] ${transcript}\n(Reply by text. Answer what they asked and move toward a booking.)` });
