@@ -44,6 +44,7 @@ body {
 .m-top h1 { margin: 0; font: 700 clamp(28px, 6vw, 44px)/0.95 var(--display); letter-spacing: -0.01em; }
 .m-top h1 .m-word { display: block; font: 600 13px/1.2 var(--body); color: var(--mute); letter-spacing: 0.02em; margin-bottom: 6px; }
 .m-sub { margin: 8px 0 0; color: var(--mute); font-size: 14px; }
+.m-biz { margin: 6px 0 0; color: #cfe0ff; font-size: 13.5px; font-weight: 600; max-width: 640px; }
 .m-powered { display: flex; gap: 8px; flex-wrap: wrap; }
 .c-spark, .c-sam { display: inline-flex; align-items: center; gap: 6px; font: 600 12.5px/1 var(--body); padding: 7px 11px; border-radius: 999px; border: 1px solid var(--edge); background: var(--glass); backdrop-filter: blur(10px); }
 .c-spark::before, .c-sam::before { content: ""; width: 7px; height: 7px; border-radius: 50%; }
@@ -176,13 +177,34 @@ body {
 .r-tip { display: flex; gap: 9px; align-items: flex-start; border-radius: var(--r-sm); padding: 10px 12px; font-size: 13.5px; line-height: 1.45; color: #ffe6ad; background: rgba(255, 197, 61, 0.07); border: 1px solid rgba(255, 197, 61, 0.3); }
 .r-tip b { flex: none; color: var(--tape); font-family: var(--display); }
 .r-note { margin: 0; font-size: 12px; color: var(--mute); line-height: 1.4; }
+.r-src { margin: -4px 0 0; font-size: 12px; color: var(--mute); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.r-against { margin: 0; font-size: 13px; color: #ffe6ad; line-height: 1.4; }
+.r-against span { color: var(--tape); font-weight: 700; }
+
+/* the hand-off a business would get */
+.r-biz { border-radius: var(--r-sm); padding: 11px 12px 10px; background: rgba(46, 230, 197, 0.06); border: 1px solid rgba(46, 230, 197, 0.32); }
+.r-biz h4 { margin: 0 0 8px; font: 700 13px/1.2 var(--display); color: #b8fff1; letter-spacing: 0.01em; }
+.r-biz dl { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.r-biz dl > div { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 8px; font-size: 13.5px; line-height: 1.4; }
+.r-biz dt { color: var(--mute); }
+.r-biz dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.r-biz p { margin: 8px 0 0; font-size: 11.5px; color: var(--mute); }
+
+/* retry after an error */
+.msg.err { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.m-retry { font: 700 13px/1 var(--display); letter-spacing: .02em; color: #00202a; background: linear-gradient(135deg, #5af3ff, #2fb7ff); border: 0; border-radius: 999px; padding: 8px 14px; cursor: pointer; }
+.m-retry:disabled { opacity: .45; cursor: default; }
 
 /* how it was measured */
 .r-pipe { border-top: 1px solid var(--edge); padding: 12px 16px 14px; background: rgba(5, 12, 26, 0.5); }
-.r-pipe h4 { margin: 0 0 9px; font: 700 13px/1.2 var(--display); color: #cfe0ff; }
+.r-pipe h4 { margin: 0 0 9px; font: 700 13px/1.2 var(--display); color: #cfe0ff; display: flex; justify-content: space-between; gap: 8px; }
+.r-pipe h4 small { font: 600 11.5px/1.2 var(--body); color: var(--mute); }
 .r-pipe ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
 .r-pipe li { display: flex; gap: 9px; align-items: baseline; font-size: 12.5px; line-height: 1.4; color: #c4d3ea; }
 .r-pipe li em { color: var(--mute); font-style: normal; }
+.r-pipe li .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.r-pipe li .ms { flex: none; color: var(--mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.r-pipe li.failed .what { color: #ffb4b4; }
 
 /* ---------- compose ---------- */
 .m-staged { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--edge); font-size: 12.5px; color: var(--mute); }
@@ -209,7 +231,9 @@ body {
   body { height: 100vh; height: 100dvh; }
   .m-top { padding: 14px 16px 20px; }
   .m-sub { font-size: 13px; }
-  .m-powered { display: none; }
+  .m-biz { font-size: 12.5px; }
+  .m-powered { gap: 6px; }
+  .c-spark, .c-sam { font-size: 11.5px; padding: 6px 9px; }
   .m-stage { padding: 12px 0 0; gap: 12px; }
   .m-samples { padding: 0 16px; gap: 6px; flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; scrollbar-width: none; }
   .m-samples::-webkit-scrollbar { display: none; }

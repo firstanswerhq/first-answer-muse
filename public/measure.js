@@ -10,21 +10,32 @@ const FALLBACK_ERR = "Couldn't measure that one — try again with a gift card, 
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
+// Chip order: the business jobs first, Face last (it is measurement-only and carries its own note).
+// A real photo for a chip goes in public/samples/<id>.jpg with <id>.txt (label line, then the message).
 const SAMPLES = [
-  { id: 'face', label: 'Face', text: 'Gift card flat on my forehead. Measure my eye spacing.' },
   { id: 'tile', label: 'Tile floor', text: 'How much tile do I need for this floor? There is a sheet of paper on it for scale.' },
   { id: 'windshield', label: 'Windshield chip', text: 'Repair or replace this chip? I put a quarter next to it.' },
   { id: 'shoe', label: 'Shoe size', text: 'What shoe size am I? My foot is on a sheet of paper.' },
   { id: 'shed', label: 'Shed fit', text: 'Will a 12 ft wide shed fit between my fence and the house?' },
   { id: 'driveway', label: 'Driveway', text: 'How big is my driveway? I need to know how much sealer to buy.' },
+  { id: 'face', label: 'Face', text: 'Gift card flat on my forehead. Measure my eye spacing.' },
 ];
 
+// The waiting steps light up as the server reports each one finished (streamed), not on a timer.
 const WAIT_STEPS = [
-  ['spark', 'Muse Spark', 'reading the photo'],
+  ['spark', 'Muse Spark', 'reading the photo and the question'],
   ['sam', 'SAM 3.1', 'outlining the objects'],
-  ['math', 'Our math', 'measuring against the ruler'],
-  ['spark', 'Muse Spark', 'writing the answer'],
+  ['math', 'Our geometry', 'measuring against the ruler'],
+  ['spark', 'Muse Spark', 'wording the answer from our numbers'],
 ];
+// Which waiting step a finished pipeline step completes (0-based index of the step that is done).
+function stageOf(step) {
+  const k = modelInfo(step.model)[0];
+  if (/routed/.test(step.step || '')) return 0;
+  if (k === 'spark') return /word/.test(step.step || '') ? 3 : 0;
+  if (k === 'sam') return 1;
+  return 2;
+}
 
 const CONF = {
   good: ['good', 'Measured'],
@@ -50,7 +61,7 @@ function modelInfo(model) {
   if (m.includes('spark')) return ['spark', 'Muse Spark'];
   if (m.includes('sam')) return ['sam', 'SAM 3.1'];
   if (m.includes('image')) return ['spark', 'Muse Image'];
-  if (!m || m === 'engine' || m === 'math' || m.includes('measure')) return ['math', 'Our math'];
+  if (!m || m === 'engine' || m.includes('math') || m.includes('measure')) return ['math', 'Our geometry'];
   return ['math', model];
 }
 
@@ -101,15 +112,18 @@ $('photoIn').addEventListener('change', (e) => {
 function working(dataUrl) {
   const el = bubble('them', `${dataUrl ? `<div class="scan"><img src="${dataUrl}" alt=""><span class="beam"></span></div>` : ''}<ol class="pipe">${WAIT_STEPS.map(([k, name, what]) => `<li><span class="spin"></span><span class="mtag ${k}">${name}</span>${what}</li>`).join('')}</ol>`, 'working');
   const items = [...el.querySelectorAll('li')];
-  let i = 0;
+  let at = 0;
   items[0].classList.add('on');
-  const timer = setInterval(() => {
-    if (i >= items.length - 1) return;
-    items[i].classList.replace('on', 'done');
-    i += 1;
-    items[i].classList.add('on');
-  }, 1400);
-  return { done: () => { clearInterval(timer); el.remove(); } };
+  // Step n finished: everything up to n is done, the next one is working.
+  const reached = (n) => {
+    if (n < at - 1) return;
+    items.forEach((li, j) => {
+      li.classList.toggle('done', j <= n);
+      li.classList.toggle('on', j === n + 1);
+    });
+    at = n + 1;
+  };
+  return { step: (s) => reached(stageOf(s)), done: () => el.remove() };
 }
 
 // ---------- annotated photo ----------
@@ -227,37 +241,53 @@ function renderReply(r, dataUrl) {
   if (r.headline || conf) {
     html += `<div class="r-top">${r.headline ? `<h3 class="r-head">${esc(r.headline)}</h3>` : '<span></span>'}${conf ? `<span class="conf ${conf[0]}">${conf[1]}</span>` : ''}</div>`;
   }
-  if (r.answer) html += `<p class="r-answer">${esc(r.answer).replace(/\n/g, '<br>')}</p>`;
+  if (r.answer) {
+    html += `<p class="r-answer">${esc(r.answer).replace(/\n/g, '<br>')}</p>`;
+    html += `<p class="r-src">${r.wording === 'spark' ? '<span class="mtag spark">Spark wording</span> · numbers from geometry' : '<span class="mtag math">Numbers from geometry</span>'}</p>`;
+  }
+  if (r.measuredAgainst) html += `<p class="r-against"><span>Measured against:</span> ${esc(r.measuredAgainst)}</p>`;
   if (nums.length) html += `<div class="r-nums">${nums.map((n) => `<div class="r-num"><span>${esc(n.label)}</span><b>${esc(n.value)}</b></div>`).join('')}</div>`;
   if (shopping.length) html += `<div class="r-sec"><h4>What to buy</h4>${list(shopping, false)}</div>`;
   if (steps.length) html += `<div class="r-sec"><h4>Steps</h4>${list(steps, true)}</div>`;
   if (r.ask) html += `<div class="r-tip"><b>Tip</b><span>${esc(r.ask)}</span></div>`;
   if (r.note) html += `<p class="r-note">${esc(r.note)}</p>`;
+  const biz = r.business;
+  if (biz && biz.job) {
+    const mats = (biz.materials || []).filter(Boolean);
+    html += `<div class="r-biz"><h4>Send to the business</h4><dl>
+      <div><dt>Job size</dt><dd>${esc(biz.job)}</dd></div>
+      ${mats.length ? `<div><dt>Materials</dt><dd>${mats.map(esc).join('<br>')}</dd></div>` : ''}
+      <div><dt>Quote</dt><dd>${esc(biz.quote)}</dd></div>
+    </dl><p>Prices come from the business’s own price list; First Answer never makes them up.</p></div>`;
+  }
   body.innerHTML = html || `<p class="r-answer">${esc(FALLBACK_ERR)}</p>`;
   el.appendChild(body);
 
-  const pipe = (r.pipeline || []).filter((p) => p && (p.step || p.result));
+  const pipe = (r.pipeline || []).filter((p) => p && p.step);
   if (pipe.length) {
     const sec = document.createElement('div');
     sec.className = 'r-pipe';
-    sec.innerHTML = `<h4>How Meta's models measured it</h4><ol>${pipe.map((p) => {
+    const secs = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
+    const total = pipe.reduce((t, p) => t + (p.ms || 0), 0);
+    sec.innerHTML = `<h4>How Meta's models measured it${total ? ` <small>${secs(total)}</small>` : ''}</h4><ol>${pipe.map((p) => {
       const [k, name] = modelInfo(p.model);
-      return `<li><span class="mtag ${k}">${esc(name)}</span><span>${esc(p.step || '')}${p.result ? ` <em>· ${esc(p.result)}</em>` : ''}</span></li>`;
+      return `<li class="${p.failed ? 'failed' : ''}"><span class="mtag ${k}">${esc(name)}</span><span class="what">${esc(p.step || '')}${p.detail ? ` <em>· ${esc(p.detail)}</em>` : ''}</span><span class="ms">${esc(secs(p.ms))}</span></li>`;
     }).join('')}</ol>`;
     el.appendChild(sec);
   }
   // The readout counts up to the measured number once the photo has been traced.
   const head = el.querySelector('.r-head');
-  const m = head && head.textContent.match(/\d+(?:\.\d+)?/);
+  const m = head && head.textContent.match(/\d[\d,]*(?:\.\d+)?/);
   if (m && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    const full = head.textContent, target = parseFloat(m[0]), dec = (m[0].split('.')[1] || '').length;
+    const full = head.textContent, target = parseFloat(m[0].replace(/,/g, '')), dec = (m[0].split('.')[1] || '').length;
+    const fmtN = (x) => (m[0].includes(',') ? Math.round(x).toLocaleString('en-US') : x.toFixed(dec));
     const before = full.slice(0, m.index), after = full.slice(m.index + m[0].length);
     const t0 = performance.now() + (hasOverlay ? 1300 : 0), dur = 900;
-    head.textContent = before + (0).toFixed(dec) + after;
+    head.textContent = before + fmtN(0) + after;
     const tickFn = (now) => {
       const k = Math.min(1, Math.max(0, (now - t0) / dur));
       const e = 1 - Math.pow(1 - k, 3);
-      head.textContent = before + (target * e).toFixed(dec) + after;
+      head.textContent = before + fmtN(target * e) + after;
       if (k < 1) requestAnimationFrame(tickFn); else head.textContent = full;
     };
     requestAnimationFrame(tickFn);
@@ -272,32 +302,84 @@ function renderReply(r, dataUrl) {
 }
 
 // ---------- send ----------
+// Reads the server's progress lines (NDJSON) as they arrive; the last line is the result or an error.
+async function postMeasure(body, onStep) {
+  let res;
+  try {
+    res = await fetch('/api/measure', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(body) });
+  } catch {
+    return { ok: false, retry: true, ask: 'Couldn’t reach First Answer. Check your connection and tap Retry.' };
+  }
+  const type = res.headers.get('content-type') || '';
+  if (!type.includes('ndjson') || !res.body) {
+    const r = await res.json().catch(() => null);
+    if (r) return r;
+    return { ok: false, retry: res.status >= 500, ask: res.status >= 500 ? 'Couldn’t reach the Meta models; tap Retry.' : FALLBACK_ERR };
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', last = null;
+  const take = (ln) => {
+    if (!ln.trim()) return;
+    let o;
+    try { o = JSON.parse(ln); } catch { return; }
+    if (o.type === 'step') onStep(o);
+    else if (o.type === 'result' || o.type === 'error') last = o;
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) { take(buf.slice(0, i)); buf = buf.slice(i + 1); }
+    }
+    take(buf);
+  } catch {
+    return { ok: false, retry: true, ask: 'The connection dropped while measuring; tap Retry.' };
+  }
+  return last || { ok: false, retry: true, ask: 'Couldn’t reach the Meta models; tap Retry.' };
+}
+
+function errorBubble(r, retry) {
+  const el = bubble('them', `<span>${esc(r?.ask || FALLBACK_ERR)}</span>`, 'err');
+  if (r?.retry && retry) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'm-retry';
+    b.textContent = 'Retry';
+    b.addEventListener('click', () => {
+      if (busy) return;
+      b.disabled = true;
+      retry();
+    });
+    el.appendChild(b);
+  }
+}
+
 let busy = false;
-async function send(blob, text) {
+async function send(blob, text, { again = false } = {}) {
   if (busy) return;
   busy = true;
   $('sendBtn').disabled = true;
   let wait = null;
   try {
     const [dataUrl, exifB64] = await Promise.all([toDataUrl(blob), headB64(blob).catch(() => null)]);
-    bubble('me', `<img src="${dataUrl}" alt="Photo sent">`, 'photo');
-    if (text) bubble('me', esc(text));
+    if (!again) {
+      bubble('me', `<img src="${dataUrl}" alt="Photo sent">`, 'photo');
+      if (text) bubble('me', esc(text));
+    }
     wait = working(dataUrl);
-    let r = null;
+    let r;
     try {
-      const res = await fetch('/api/measure', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataUrl, text, exifB64 }),
-      });
-      r = await res.json().catch(() => null);
-      if (!res.ok || !r || r.ok === false) throw Object.assign(new Error('measure failed'), { ask: r?.ask });
+      r = await postMeasure({ dataUrl, text, exifB64 }, (s) => wait.step(s));
     } finally {
       wait.done();
     }
-    renderReply(r, dataUrl);
-  } catch (e) {
-    bubble('them', esc(e.ask || FALLBACK_ERR), 'err');
+    if (r && r.ok !== false && (r.headline || r.answer)) renderReply(r, dataUrl);
+    else errorBubble(r, () => send(blob, text, { again: true }));
+  } catch {
+    errorBubble({ ask: FALLBACK_ERR, retry: true }, () => send(blob, text, { again: true }));
   } finally {
     busy = false;
     $('sendBtn').disabled = false;
@@ -332,14 +414,16 @@ function renderChips() {
     const srv = findSample(s);
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = `m-chip${srv?.dataUrl ? ' has-photo' : ''}`;
+    b.className = `m-chip${srv?.url ? ' has-photo' : ''}`;
     b.innerHTML = `<i></i>${esc(s.label)}`;
-    b.title = srv?.dataUrl ? 'Send this sample photo' : 'Fill in a sample question';
+    b.title = srv?.url ? 'Send this sample photo' : 'Fill in a sample question';
     b.addEventListener('click', async () => {
       const text = srv?.text || s.text;
-      if (srv?.dataUrl) {
+      if (srv?.url) {
         if (busy) return;
-        const blob = await (await fetch(srv.dataUrl)).blob();
+        const res = await fetch(srv.url).catch(() => null);
+        if (!res?.ok) { textIn.value = text; textIn.focus(); return; }
+        const blob = await res.blob();
         textIn.value = '';
         unstage();
         send(blob, text);

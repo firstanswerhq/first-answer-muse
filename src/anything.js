@@ -277,7 +277,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
   if (live) {
     try {
       read = await live.read(dataUrl, READ_PROMPT + (text ? `\nTheir message: "${text}"` : ''), READ_SCHEMA);
-      pipeline.add({ model: 'muse-spark-1.3', step: 'read the photo and the question', result: read });
+      pipeline.add({ model: 'muse-spark-1.3', step: 'read the photo and the question', result: { ...read } });
     } catch (e) {
       pipeline.add({ model: 'muse-spark-1.3', step: 'read the photo and the question', error: String(e.message).slice(0, 200) });
     }
@@ -289,6 +289,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
   if (guess.coin) read.ruler = guess.coin; // "it's a quarter" corrects the coin
   // A driveway, patio or slab is square feet against a door, whatever the model filed it under.
   if (read.task !== 'surface_area' && read.task !== 'face' && (guess.task === 'surface_area' || (read.task === 'size' && SURFACE_WORDS.test(String(read.target).toLowerCase())))) {
+    if (live) pipeline.add({ model: 'first-answer math', step: 'routed by the message to square feet', result: { from: read.task, to: 'surface area' } });
     read.task = 'surface_area';
     if (!SURFACE_WORDS.test(String(read.target).toLowerCase())) read.target = (String(text).toLowerCase().match(/driveway|patio|walkway|sidewalk|slab|pool deck|parking pad/) || ['driveway'])[0];
   }
@@ -524,12 +525,12 @@ async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
 // Sealer coverage, from typical product labels (the label on the pail wins).
 export const SEALER = {
   concrete: { perGallon: 200, labelRange: '150–300', unit: 'gallon' },
-  asphalt: { perPail: 300, labelRange: '250–350', unit: '5-gallon pail' },
+  asphalt: { perPail: 300, labelRange: '250–350', unit: 'five-gallon pail' },
 };
 export function sealerNeeded(sqftHigh, surface = 'unknown') {
   const out = [];
   if (surface !== 'asphalt') out.push({ kind: 'concrete', qty: Math.ceil(sqftHigh / SEALER.concrete.perGallon), unit: 'gallon', text: `Concrete sealer: ${Math.ceil(sqftHigh / SEALER.concrete.perGallon)} gallons per coat (at about ${SEALER.concrete.perGallon} sq ft per gallon; labels say ${SEALER.concrete.labelRange})` });
-  if (surface !== 'concrete') out.push({ kind: 'asphalt', qty: Math.ceil(sqftHigh / SEALER.asphalt.perPail), unit: '5-gallon pail', text: `Asphalt sealer: ${Math.ceil(sqftHigh / SEALER.asphalt.perPail)} five-gallon pails per coat (at about ${SEALER.asphalt.perPail} sq ft per pail; labels say ${SEALER.asphalt.labelRange})` });
+  if (surface !== 'concrete') out.push({ kind: 'asphalt', qty: Math.ceil(sqftHigh / SEALER.asphalt.perPail), unit: 'five-gallon pail', text: `Asphalt sealer: ${Math.ceil(sqftHigh / SEALER.asphalt.perPail)} five-gallon pails per coat (at about ${SEALER.asphalt.perPail} sq ft per pail; labels say ${SEALER.asphalt.labelRange})` });
   return out;
 }
 
