@@ -282,7 +282,10 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   ]);
   if (chk) r.checked = chk.agreed ? 'agreed' : chk.skipped ? 'skipped' : 'disagreed';
   if (chk && chk.agreed === false) {
-    return { ...finishErr(r.read, pipeline, chk.tip, r.task, r.overlay), refused: 'spark-check', checked: 'disagreed', measuredAgainst: r.measuredAgainst };
+    // The wording ran alongside the check; it is not sent, and the panel says so.
+    const w = pipeline.find((p) => /word the answer/.test(p.step));
+    if (w) { w.result = { used: false, fellBack: 'not sent: Spark’s check disagreed' }; delete w.error; }
+    return { ...finishErr(r.read, pipeline, chk.tip, r.task, r.overlay), refused: 'spark-check', checked: 'disagreed' };
   }
   return r;
 }
@@ -811,7 +814,10 @@ async function wordAnswer(r, live, pipeline, timeoutMs = WORD_TIMEOUT_MS) {
 // without the check.
 
 export const CHECK_TIMEOUT_MS = 10000;
-const COLOR_OF = { target: COLOR_NAMES.target, ruler: COLOR_NAMES.ruler, other: 'BLUE' };
+const ROLE_WORD = { MAGENTA: 'measured', ORANGE: 'ruler', BLUE: 'other side' };
+const ROLE_PHRASE = { magenta: 'outline of the thing to measure', orange: 'outline of the ruler', blue: 'outline of the other side' };
+const uncolor = (t) => String(t || '').replace(/\b(magenta|orange|blue)(?: outline)?\b/gi, (_, c) => ROLE_PHRASE[c.toLowerCase()]);
+const COLOR_OF = COLOR_NAMES;
 
 export const CHECK_SCHEMA = {
   type: 'object',
@@ -841,7 +847,7 @@ async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK
   const step = { model: 'muse-spark-1.3', step: 'check SAM’s outlines on the photo' };
   let timer;
   try {
-    const pics = checkImages(dataUrl, items.map((it) => ({ role: it.role === 'other' ? 'target' : it.role, obj: it.obj })), check.frame);
+    const pics = checkImages(dataUrl, items.map((it) => ({ role: it.role, obj: it.obj })), check.frame);
     const images = pics ? [pics.overlay, ...pics.crops.map((c) => c.url)] : [dataUrl];
     const ans = await Promise.race([
       live.check(images, checkPrompt(items, Boolean(pics)), CHECK_SCHEMA),
@@ -870,7 +876,7 @@ function retakeTip(outlines, sparkTip) {
   if (coin && coin !== bad.ruler) return `Muse Spark says the coin looks like a ${rulerLabel(coin)}, not a ${rulerLabel(bad.ruler)}, so I didn’t measure. If it is, send the photo again and say “it’s a ${rulerLabel(coin)}”.`;
   const tip = String(sparkTip || '').trim();
   const own = tip && tip.length <= 200 && !/\d/.test(tip) ? tip : `Retake it with ${bad.name} whole, in focus and near the middle of the shot.`;
-  return `I didn’t measure this one: Muse Spark checked SAM’s ${bad.color.toLowerCase()} outline and saw ${bad.seen}, not ${bad.name}. ${own}`;
+  return `I didn’t measure this one: Muse Spark checked SAM’s ${ROLE_PHRASE[bad.color.toLowerCase()]} and saw ${bad.seen}, not ${bad.name}. ${uncolor(own)}`;
 }
 
 // A failed call in a few plain words for the public panel; raw upstream bodies never reach the page.
@@ -896,11 +902,13 @@ export function stepDetail(s) {
   const r = s.result;
   if (!r) return '';
   if (Array.isArray(r.objects)) return r.objects.map((o) => `${o.concept}: ${o.count} outline${o.count === 1 ? '' : 's'}${o.conf != null ? ` (conf ${o.conf.toFixed(2)})` : ''}`).join(' · ');
+  if ('used' in r && /^not sent/.test(r.fellBack || '')) return r.fellBack;
   if ('used' in r) return r.used ? `used${r.language === 'es' ? ' (Spanish)' : ''}; ${r.numbersChecked} number${r.numbersChecked === 1 ? '' : 's'} checked against ours` : `kept our template (${r.fellBack})`;
   if ('check' in r) {
     if (r.check === 'skipped') return `check skipped (${r.why}); measured without it`;
-    const seen = (r.outlines || []).map((o) => `${o.color.toLowerCase()} = ${o.seen}`).join(', ');
-    return r.check === 'agrees' ? `agrees: ${seen}` : `disagrees: ${r.problem || seen}; no number sent`;
+    // The page draws its own colors, so the panel names each outline by its role, not the color Spark saw.
+    const seen = (r.outlines || []).map((o) => `${ROLE_WORD[o.color] || o.color.toLowerCase()}: ${o.seen}`).join(', ');
+    return r.check === 'agrees' ? `agrees · ${seen}` : `disagrees · ${uncolor(r.problem) || seen}; no number sent`;
   }
   if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}${r.language === 'es' ? ' · language: Spanish' : ''}`;
   const pretty = (k) => k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/Mm2\b/, ' mm²').replace(/Mm\b/, ' mm').replace(/Ft\b/, ' ft').replace(/In2\b/, ' sq in').replace(/Pct\b/, ' %').toLowerCase();

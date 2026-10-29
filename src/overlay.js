@@ -1,13 +1,13 @@
 // Pictures for Muse Spark's check of SAM's work: the customer's photo with SAM's outlines drawn on
-// it (green = what we measure, orange = the ruler), plus a close-up crop of each outline. Pure JS
+// it (magenta = what we measure, orange = the ruler, blue = the other side of a gap), plus a close-up crop of each outline. Pure JS
 // (jpeg-js), no native image libraries. The page always sends JPEG; anything else returns null and
 // the check falls back to the plain photo plus box coordinates.
 
 import jpeg from 'jpeg-js';
 import { decodeMaskToRaster } from '@meta-sam/parser';
 
-export const COLORS = { target: [40, 230, 90], ruler: [255, 150, 20] };
-export const COLOR_NAMES = { target: 'GREEN', ruler: 'ORANGE' };
+export const COLORS = { target: [255, 40, 210], ruler: [255, 150, 20], other: [40, 120, 255] };
+export const COLOR_NAMES = { target: 'MAGENTA', ruler: 'ORANGE', other: 'BLUE' };
 
 export function decodeDataUrl(dataUrl) {
   const m = /^data:image\/jpe?g;base64,(.+)$/.exec(String(dataUrl || ''));

@@ -154,6 +154,19 @@ body {
   font: 700 15px/1 var(--display); letter-spacing: .02em; color: #fff; padding: 7px 12px; border-radius: 10px;
   background: rgba(5, 12, 26, 0.82); border: 1px solid var(--laser); box-shadow: 0 0 18px rgba(79, 240, 255, .45); backdrop-filter: blur(6px); white-space: nowrap; }
 
+/* the key under the photo: SAM's masks and Spark's check */
+.shot-key { display: flex; flex-direction: column; gap: 6px; padding: 9px 14px 10px; background: rgba(5, 12, 26, 0.6); border-bottom: 1px solid var(--edge); font-size: 12px; line-height: 1.35; color: #c4d3ea; }
+.shot-key .k-row, .shot-key .k-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.shot-key .k { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.shot-key .k i { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.shot-key .k.target i { background: rgba(79, 240, 255, .35); border: 2px solid var(--laser); }
+.shot-key .k.ruler i { background: rgba(255, 197, 61, .35); border: 2px solid var(--tape); }
+.shot-key .k em { font-style: normal; color: var(--mute); font-variant-numeric: tabular-nums; }
+.shot-key .k-check.ok { color: var(--good); }
+.shot-key .k-check.bad { color: #ffb4b4; }
+.shot-key .k-check.skip { color: var(--mute); }
+.r-head.r-none { font-size: clamp(22px, 6vw, 28px); color: #ffe6ad; text-shadow: none; }
+
 /* ---------- the readout ---------- */
 .r-body { padding: 16px 16px 16px; display: flex; flex-direction: column; gap: 12px; }
 .r-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }

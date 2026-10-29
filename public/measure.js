@@ -26,7 +26,7 @@ const WAIT_STEPS = [
   ['spark', 'Muse Spark', 'reading the photo and the question'],
   ['sam', 'SAM 3.1', 'outlining the objects'],
   ['math', 'Our geometry', 'measuring against the ruler'],
-  ['spark', 'Muse Spark', 'wording the answer from our numbers'],
+  ['spark', 'Muse Spark', 'checking SAM’s outlines and wording the answer'],
 ];
 // Which waiting step a finished pipeline step completes (0-based index of the step that is done).
 function stageOf(step) {
@@ -175,9 +175,10 @@ function annotatedShot(dataUrl, overlay) {
       svg.appendChild(r);
     }
     const label = o.label || (isRuler ? 'reference' : 'target');
+    const conf = o.conf != null ? ` · ${Number(o.conf).toFixed(2)}` : '';
     // Rulers are small and often sit inside a target: tag them under the box.
-    if (isRuler) pin('ruler below', `ruler: ${label}`, b.x1, Math.min(b.y2, frame.h * 0.92));
-    else pin('target', label, b.x1, b.y1);
+    if (isRuler) pin('ruler below', `ruler: ${label}${conf}`, b.x1, Math.min(b.y2, frame.h * 0.92));
+    else pin('target', `${label}${conf}`, b.x1, b.y1);
   });
 
   // Measurement lines with end ticks and a label pill in the middle.
@@ -220,6 +221,19 @@ function annotatedShot(dataUrl, overlay) {
   return wrap;
 }
 
+// The key under the photo: these are Meta SAM 3.1's real masks (with its confidence), and what Muse
+// Spark said when it checked them.
+function shotKey(r) {
+  const outlines = r.overlay?.outlines || [];
+  if (!outlines.length) return null;
+  const el = document.createElement('div');
+  el.className = 'shot-key';
+  const item = (o) => `<span class="k ${o.role === 'ruler' ? 'ruler' : 'target'}"><i></i>${esc(o.role === 'ruler' ? `ruler: ${o.label}` : o.label)}${o.conf != null ? ` <em>${Number(o.conf).toFixed(2)}</em>` : ''}</span>`;
+  const check = { agreed: ['ok', 'Muse Spark checked these outlines and agrees'], disagreed: ['bad', 'Muse Spark checked these outlines and disagreed, so nothing was measured'], skipped: ['skip', 'Muse Spark’s check didn’t come back in time, so this was measured without it'] }[r.checked];
+  el.innerHTML = `<div class="k-row"><span class="mtag sam">SAM 3.1 masks</span>${outlines.map(item).join('')}</div>${check ? `<div class="k-check ${check[0]}"><span class="mtag spark">Muse Spark</span>${esc(check[1])}</div>` : ''}`;
+  return el;
+}
+
 // ---------- reply ----------
 function list(items, ordered) {
   const tag = ordered ? 'ol' : 'ul';
@@ -229,7 +243,11 @@ function list(items, ordered) {
 function renderReply(r, dataUrl) {
   const el = bubble('them', '', 'reply');
   const hasOverlay = r.overlay?.frame && ((r.overlay.outlines || []).length || (r.overlay.lines || []).length);
-  if (hasOverlay) el.appendChild(annotatedShot(dataUrl, r.overlay));
+  if (hasOverlay) {
+    el.appendChild(annotatedShot(dataUrl, r.overlay));
+    const key = shotKey(r);
+    if (key) el.appendChild(key);
+  }
 
   const body = document.createElement('div');
   body.className = 'r-body';
@@ -238,18 +256,21 @@ function renderReply(r, dataUrl) {
   const shopping = (r.shopping || []).filter(Boolean);
   const steps = (r.steps || []).filter(Boolean);
   let html = '';
-  if (r.headline || conf) {
+  if (r.ok === false) {
+    // Not measured, but SAM's outlines are shown so the customer can see what went wrong.
+    html += `<div class="r-top"><h3 class="r-head r-none">${r.refused ? 'Retake needed' : 'Not measured yet'}</h3></div><div class="r-tip"><b>Tip</b><span>${esc(r.ask || FALLBACK_ERR)}</span></div>`;
+  } else if (r.headline || conf) {
     html += `<div class="r-top">${r.headline ? `<h3 class="r-head">${esc(r.headline)}</h3>` : '<span></span>'}${conf ? `<span class="conf ${conf[0]}">${conf[1]}</span>` : ''}</div>`;
   }
-  if (r.answer) {
-    html += `<p class="r-answer">${esc(r.answer).replace(/\n/g, '<br>')}</p>`;
-    html += `<p class="r-src">${r.wording === 'spark' ? '<span class="mtag spark">Spark wording</span> · numbers from geometry' : '<span class="mtag math">Numbers from geometry</span>'}</p>`;
+  if (r.answer && r.ok !== false) {
+    html += `<p class="r-answer"${r.language === 'es' ? ' lang="es"' : ''}>${esc(r.answer).replace(/\n/g, '<br>')}</p>`;
+    html += `<p class="r-src">${r.wording === 'spark' ? `<span class="mtag spark">Spark wording${r.language === 'es' ? ' · en español' : ''}</span> · numbers from geometry, checked` : '<span class="mtag math">Numbers from geometry</span>'}</p>`;
   }
-  if (r.measuredAgainst) html += `<p class="r-against"><span>Measured against:</span> ${esc(r.measuredAgainst)}</p>`;
+  if (r.measuredAgainst && r.ok !== false) html += `<p class="r-against"><span>Measured against:</span> ${esc(r.measuredAgainst)}</p>`;
   if (nums.length) html += `<div class="r-nums">${nums.map((n) => `<div class="r-num"><span>${esc(n.label)}</span><b>${esc(n.value)}</b></div>`).join('')}</div>`;
   if (shopping.length) html += `<div class="r-sec"><h4>What to buy</h4>${list(shopping, false)}</div>`;
   if (steps.length) html += `<div class="r-sec"><h4>Steps</h4>${list(steps, true)}</div>`;
-  if (r.ask) html += `<div class="r-tip"><b>Tip</b><span>${esc(r.ask)}</span></div>`;
+  if (r.ask && r.ok !== false) html += `<div class="r-tip"><b>Tip</b><span>${esc(r.ask)}</span></div>`;
   if (r.note) html += `<p class="r-note">${esc(r.note)}</p>`;
   const biz = r.business;
   if (biz && biz.job) {
@@ -406,6 +427,8 @@ async function send(blob, text, { again = false } = {}) {
       wait.done();
     }
     if (r && r.ok !== false && (r.headline || r.answer)) renderReply(r, dataUrl);
+    // Not measured, but SAM outlined something: show the photo with the outlines and the tip.
+    else if (r && r.ok === false && !r.retry && r.overlay?.frame && (r.overlay.outlines || []).length) renderReply(r, dataUrl);
     else errorBubble(r, () => send(blob, text, { again: true }));
   } catch {
     errorBubble({ ask: FALLBACK_ERR, retry: true }, () => send(blob, text, { again: true }));

@@ -23,7 +23,7 @@ function grayJpeg(W, H) {
 const PHOTO = grayJpeg(cam.W, cam.H);
 const agree = async (images, prompt, schema) => {
   const n = (prompt.match(/^- /gm) || []).length;
-  return { outlines: Array.from({ length: n }, (_, i) => ({ color: i ? 'ORANGE' : 'GREEN', ok: true, seen: i ? 'a US quarter' : 'a small chip in the glass' })), problem: '', retake_tip: '' };
+  return { outlines: Array.from({ length: n }, (_, i) => ({ color: i ? 'ORANGE' : 'MAGENTA', ok: true, seen: i ? 'a US quarter' : 'a small chip in the glass' })), problem: '', retake_tip: '' };
 };
 const run = (check, extra = {}) => measureAnything({ dataUrl: PHOTO, text: 'repair or replace?', deps: { read: async () => extra.read || READ, segment: async (_d, c) => segs[c], check, word: extra.word }, ...extra.opts });
 
@@ -34,42 +34,42 @@ test('Spark gets the photo with SAM’s outlines drawn on it and a close-up of e
   assert.equal(r.checked, 'agreed');
   assert.equal(got.images.length, 3);
   assert.ok(got.images.every((u) => /^data:image\/jpeg;base64,/.test(u)));
-  assert.match(got.prompt, /GREEN outline: should be the chip/);
+  assert.match(got.prompt, /MAGENTA outline: should be the chip/);
   assert.match(got.prompt, /ORANGE outline: should be a quarter \(24\.26 mm\)/);
   assert.equal(got.schema, CHECK_SCHEMA);
-  // The overlay really has SAM's green outline at the chip's place.
+  // The overlay really has SAM's magenta outline at the chip's place.
   const ov = decodeDataUrl(got.images[0]);
   const b = segs.chip.objects[0].box, s = ov.width / cam.W;
-  let green = 0;
+  let magenta = 0;
   for (let y = Math.floor(b.y1 * s); y <= Math.ceil(b.y2 * s); y++) for (let x = Math.floor(b.x1 * s); x <= Math.ceil(b.x2 * s); x++) {
     const i = (y * ov.width + x) * 4;
-    if (ov.data[i + 1] > 170 && ov.data[i] < 120) green++;
+    if (ov.data[i] > 200 && ov.data[i + 1] < 110 && ov.data[i + 2] > 160) magenta++;
   }
-  assert.ok(green > 10, `green pixels at the chip: ${green}`);
+  assert.ok(magenta > 10, `magenta pixels at the chip: ${magenta}`);
   const step = r.pipeline.find((p) => /check SAM/.test(p.step));
   assert.equal(step.model, 'muse-spark-1.3');
-  assert.match(stepDetail(step), /^agrees: green = a small chip in the glass, orange = a US quarter/);
+  assert.match(stepDetail(step), /^agrees · measured: a small chip in the glass, ruler: a US quarter/);
 });
 
 test('Spark disagrees about the object: no number, a specific retake tip, outlines kept to show', async () => {
-  const r = await run(async () => ({ outlines: [{ color: 'GREEN', ok: false, seen: 'a water spot' }, { color: 'ORANGE', ok: true, seen: 'a quarter' }], problem: 'The green outline is a water spot, not a chip.', retake_tip: 'Wipe the glass and retake close up with the chip in the middle.' }));
+  const r = await run(async () => ({ outlines: [{ color: 'MAGENTA', ok: false, seen: 'a water spot' }, { color: 'ORANGE', ok: true, seen: 'a quarter' }], problem: 'The magenta outline is a water spot, not a chip.', retake_tip: 'Wipe the glass and retake close up with the chip in the middle.' }));
   assert.equal(r.ok, false);
   assert.equal(r.refused, 'spark-check');
   assert.equal(r.headline, null);
   assert.deepEqual(r.numbers, []);
-  assert.match(r.ask, /didn’t measure.*saw a water spot, not the chip\. Wipe the glass/);
+  assert.match(r.ask, /didn’t measure.*outline of the thing to measure and saw a water spot, not the chip\. Wipe the glass/);
   assert.ok(r.overlay.outlines.length >= 2);
-  assert.match(stepDetail(r.pipeline.find((p) => /check SAM/.test(p.step))), /^disagrees: The green outline is a water spot/);
+  assert.match(stepDetail(r.pipeline.find((p) => /check SAM/.test(p.step))), /^disagrees · The outline of the thing to measure is a water spot/);
 });
 
 test('Spark sees a different coin: the tip tells them how to say so', async () => {
-  const r = await run(async () => ({ outlines: [{ color: 'GREEN', ok: true, seen: 'chip' }, { color: 'ORANGE', ok: false, seen: 'a dime' }], problem: 'That coin is a dime.', retake_tip: 'Use a quarter, about 24 mm.' }));
+  const r = await run(async () => ({ outlines: [{ color: 'MAGENTA', ok: true, seen: 'chip' }, { color: 'ORANGE', ok: false, seen: 'a dime' }], problem: 'That coin is a dime.', retake_tip: 'Use a quarter, about 24 mm.' }));
   assert.equal(r.ok, false);
   assert.match(r.ask, /looks like a dime, not a quarter.*“it’s a dime”/);
 });
 
 test('a numbered tip from Spark is never shown; ours is', async () => {
-  const r = await run(async () => ({ outlines: [{ color: 'GREEN', ok: false, seen: 'a scratch' }, { color: 'ORANGE', ok: true, seen: 'quarter' }], problem: 'x', retake_tip: 'The chip is 0.4 in, retake.' }));
+  const r = await run(async () => ({ outlines: [{ color: 'MAGENTA', ok: false, seen: 'a scratch' }, { color: 'ORANGE', ok: true, seen: 'quarter' }], problem: 'x', retake_tip: 'The chip is 0.4 in, retake.' }));
   assert.doesNotMatch(r.ask, /0\.4/);
   assert.match(r.ask, /Retake it with the chip whole/);
 });
@@ -104,7 +104,7 @@ test('driveway: Spark checks the driveway and the garage door', async () => {
     check: async (images, p, sc) => { prompt = p; return agree(images, p, sc); },
   } });
   assert.equal(r.ok, true, r.ask);
-  assert.match(prompt, /GREEN outline: should be the whole driveway/);
+  assert.match(prompt, /MAGENTA outline: should be the whole driveway/);
   assert.match(prompt, /ORANGE outline: should be a double garage door \(16 × 7 ft\)/);
 });
 
@@ -133,4 +133,11 @@ test('Spanish question, Spanish answer: numbers and units still checked against 
   assert.equal(wrong.wording, 'template');
   const words = await run(agree, { read: es, word: async () => 'Esa grieta mide dos pulgadas, así que se puede reparar.' });
   assert.equal(words.wording, 'template');
+});
+
+test('a refused answer’s panel says the wording was not sent', async () => {
+  const r = await run(async () => ({ outlines: [{ color: 'MAGENTA', ok: false, seen: 'a scratch' }, { color: 'ORANGE', ok: true, seen: 'quarter' }], problem: 'x', retake_tip: '' }), { word: async (_s, f) => JSON.parse(f).template_answer });
+  assert.equal(r.ok, false);
+  assert.match(stepDetail(r.pipeline.find((p) => /word the answer/.test(p.step))), /not sent: Spark’s check disagreed/);
+  assert.equal(r.answer, null);
 });
