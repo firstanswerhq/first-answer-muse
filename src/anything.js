@@ -759,15 +759,32 @@ async function wordAnswer(r, live, pipeline, timeoutMs = WORD_TIMEOUT_MS) {
       pipeline.add({ ...step, result: { used: false, fellBack: check.reason } });
     }
   } catch (e) {
-    pipeline.add({ ...step, error: String(e.message).slice(0, 200), result: { used: false, fellBack: 'template' } });
+    pipeline.add({ ...step, error: String(e.message).slice(0, 200), result: { used: false, fellBack: friendlyError(e.message) } });
   } finally {
     clearTimeout(timer);
   }
 }
 
+// A failed call in a few plain words for the public panel; raw upstream bodies never reach the page.
+export function friendlyError(msg) {
+  const m = String(msg?.message ?? msg ?? '');
+  const t = m.match(/no reply in ([\d.]+) s/);
+  if (t) return `no reply in ${t[1]} s`;
+  if (/daily (?:limit|cap)|budget/i.test(m)) return 'today’s limit of Meta calls is used up';
+  if (/\b429\b|rate limit/i.test(m)) return 'Meta was busy (rate limited)';
+  if (/\b(?:401|403)\b|unauthori[sz]ed|api key/i.test(m)) return 'Meta turned the request away';
+  if (/timed? ?out|timeout|aborted|ETIMEDOUT/i.test(m)) return 'timed out';
+  if (/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|network|socket/i.test(m)) return 'couldn’t connect';
+  const code = m.match(/\b(5\d\d)\b/);
+  if (code) return `Meta’s server had a hiccup (${code[1]})`;
+  if (/\b4\d\d\b/.test(m)) return 'Meta couldn’t use that request';
+  if (/JSON|Unexpected token|parse/i.test(m)) return 'unexpected reply';
+  return 'unexpected error';
+}
+
 // One short line per step for the "How Meta's models measured it" panel.
 export function stepDetail(s) {
-  if (s.error && !s.result) return `failed: ${s.error}`;
+  if (s.error && !s.result) return `failed: ${friendlyError(s.error)}`;
   const r = s.result;
   if (!r) return '';
   if (Array.isArray(r.objects)) return r.objects.map((o) => `${o.concept}: ${o.count} outline${o.count === 1 ? '' : 's'}${o.conf != null ? ` (conf ${o.conf.toFixed(2)})` : ''}`).join(' · ');

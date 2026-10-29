@@ -13,7 +13,7 @@ import { business } from './business.js';
 import * as engine from './engine.js';
 import { handleMessage, addNote, getThread } from './agent.js';
 import { quoteFromPhoto, photoReply } from './photo.js';
-import { measureAnything, stepDetail } from './anything.js';
+import { measureAnything, stepDetail, friendlyError } from './anything.js';
 import { readExif } from './distance.js';
 import fs from 'node:fs';
 import { rateLimiter, tokenOk, redactSnapshot } from './guard.js';
@@ -80,7 +80,7 @@ const safe = (fn) => async (req, res) => {
     await fn(req, res);
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'Something went wrong on our side. Try again in a moment.', detail: String(e.message).slice(0, 300) });
+    res.status(500).json({ error: 'Something went wrong on our side. Try again in a moment.', detail: friendlyError(e) });
   }
 };
 
@@ -268,14 +268,14 @@ export function attachLive(server) {
               const r = await handleMessage({ threadId, text: `[LIVE CALL, spoken] ${said}`, phone });
               afterTurn(threadId, r);
               send({ type: 'reply', text: r.reply, tools: r.tools.map((x) => x.name) });
-            }).catch((e) => send({ type: 'error', message: String(e.message).slice(0, 200) }));
+            }).catch((e) => send({ type: 'error', message: `Something went wrong: ${friendlyError(e)}.` }));
           }
           if (ev.type === 'error') send({ type: 'error', message: ev.message });
         },
         onClose: () => send({ type: 'closed' }),
       });
     } catch (e) {
-      send({ type: 'error', message: `Could not reach Muse Voice Transcribe: ${String(e.message).slice(0, 200)}` });
+      send({ type: 'error', message: `Could not reach Muse Voice Transcribe: ${friendlyError(e)}.` });
       return sock.close();
     }
     send({ type: 'ready', threadId });

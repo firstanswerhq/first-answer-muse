@@ -166,3 +166,17 @@ test('numbers with units are read the same in Spanish', () => {
   assert.equal(checkWording('Esa grieta de 0.5 in es más pequeña que una moneda de un cuarto de dólar, así que se puede reparar.', CHIP, CHIP.headline).ok, true);
   assert.equal(checkWording('Tu pie mide 10.5 pulgadas: talla 10.5 de hombre o 12 de mujer, más o menos EU 44.', SHOE, SHOE.headline).ok, true);
 });
+
+test('the public panel never shows raw upstream errors; a Spark timeout says why', async () => {
+  const { friendlyError } = await import('../src/anything.js');
+  assert.equal(stepDetail({ model: 'sam-3.1', step: 'outline', error: 'SAM 500: <html><body>Internal stack trace at x.y</body></html>' }), 'failed: Meta’s server had a hiccup (500)');
+  assert.equal(friendlyError('SAM 429: {"error":"slow down"}'), 'Meta was busy (rate limited)');
+  assert.equal(friendlyError('401 Incorrect API key provided: sk-abc'), 'Meta turned the request away');
+  assert.equal(friendlyError('fetch failed'), 'couldn’t connect');
+  assert.equal(friendlyError(new Error('Request timed out.')), 'timed out');
+  assert.equal(friendlyError('something odd'), 'unexpected error');
+  const slow = await run(() => new Promise(() => {}), { wordTimeoutMs: 300 });
+  assert.equal(stepDetail(slow.pipeline.at(-1)), 'kept our template (no reply in 0.3 s)');
+  const broken = await run(async () => { throw new Error('Meta 503: <html>upstream body</html>'); });
+  assert.equal(stepDetail(broken.pipeline.at(-1)), 'kept our template (Meta’s server had a hiccup (503))');
+});
