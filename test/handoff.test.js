@@ -87,7 +87,7 @@ test('each chip goes to its own demo business, priced from that business’s dem
     assert.equal(h.to, SIGHT_BUSINESSES[r.task].name);
     assert.match(h.block.quote, line);
     const sent = await (await send({ id: h.id })).json();
-    assert.match(sent.message, new RegExp(`^Sent to ${SIGHT_BUSINESSES[r.task].name.replace(/[.&]/g, '.')}\\. It’s on ${SIGHT_BUSINESSES[r.task].owner}’s board`));
+    assert.match(sent.message, new RegExp(`^Sent to ${SIGHT_BUSINESSES[r.task].name.replace(/\.$/, '').replace(/[.&]/g, '.')}\\. It’s on ${SIGHT_BUSINESSES[r.task].owner}’s board`));
     assert.equal(sent.board, `/owner.html?b=${id}`);
     const lead = engine.snapshot().leads.find((l) => l.id === sent.leadId);
     assert.equal(lead.business.id, id);
@@ -167,4 +167,13 @@ test('a Spanish question gets the hand-off confirmation in Spanish', async () =>
   const h = rememberHandoff(DRIVE);
   const r = await (await send({ id: h.id, phone: '615-555-0199', lang: 'es' })).json();
   assert.match(r.message, /^Enviado a Brightside Exterior Care\. Ya está en el tablero de Dana y te escribirán al •••-•••-0199\.$/);
+});
+
+test('the owner gets the job in English even when the customer asked in Spanish', async () => {
+  engine.reset();
+  const h = rememberHandoff({ ...DRIVE, headline: 'Unos 420 pies cuadrados', measuredAgainst: 'puerta de garaje doble (16 × 7 pies)', en: { headline: 'About 420 sq ft', measuredAgainst: 'double garage door (16 × 7 ft)' } });
+  await send({ id: h.id });
+  const l = engine.snapshot().leads[0];
+  assert.equal(l.summary, 'Sight photo: About 420 sq ft');
+  assert.equal(l.sight.measuredAgainst, 'double garage door (16 × 7 ft)');
 });

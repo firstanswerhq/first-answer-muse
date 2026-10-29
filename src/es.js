@@ -187,7 +187,8 @@ export function detectLanguage(text) {
 
 // The whole card in Spanish (the business block stays as the owner gets it).
 export function localizeResult(r) {
-  const out = { ...r, lang: 'es' };
+  // The owner gets the job in English: keep the English headline and ruler for the hand-off.
+  const out = { ...r, lang: 'es', en: { headline: r.headline, measuredAgainst: r.measuredAgainst } };
   if (out.headline) out.headline = es(out.headline);
   if (out.answer && out.wording !== 'spark') out.answer = es(out.answer);
   if (out.answerTemplate) out.answerTemplate = es(out.answerTemplate);
@@ -196,6 +197,8 @@ export function localizeResult(r) {
   out.numbers = (out.numbers || []).map((n) => ({ label: es(n.label), value: es(n.value) }));
   out.shopping = (out.shopping || []).map(es);
   out.steps = (out.steps || []).map(es);
-  if (out.overlay?.lines) out.overlay = { ...out.overlay, lines: out.overlay.lines.map((l) => ({ ...l, label: l.label ? units(l.label) : l.label })) };
+  if (out.overlay) out.overlay = { ...out.overlay,
+    lines: (out.overlay.lines || []).map((l) => ({ ...l, label: l.label ? units(l.label) : l.label })),
+    outlines: (out.overlay.outlines || []).map((o) => ({ ...o, label: o.role === 'rejected' ? o.label.replace(/^SAM’s first try/, 'Primer intento de SAM') : (NOUN[o.label] ? bare(o.label) : RULER[o.label] || o.label) })) };
   return out;
 }

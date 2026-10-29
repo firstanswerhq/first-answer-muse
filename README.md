@@ -109,7 +109,7 @@ The numbers above come from synthetic scenes with known answers. Real-photo accu
 
 ```bash
 npm install
-npm test                         # 168 tests, no key needed, no Meta credits spent (fixtures and stand-ins)
+npm test                         # 169 tests, no key needed, no Meta credits spent (fixtures and stand-ins)
 npm start                        # http://localhost:3000/measure.html
 MODEL_API_KEY=... npm start      # live on the Meta Model API
 ```

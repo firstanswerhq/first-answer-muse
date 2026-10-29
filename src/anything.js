@@ -155,6 +155,8 @@ export function chipVerdict(m) {
 
 const inchStr = (mm) => {
   const inch = mm / 25.4;
+  // Under an inch, sixteenths are too coarse (0.54 in would read 0.56): hundredths.
+  if (inch < 1) return `${String(Math.round(inch * 100) / 100)} in`;
   if (inch < 2) { const e = Math.round(inch * 16); return `${e % 16 === 0 ? e / 16 : (e / 16).toFixed(2).replace(/0$/, '')} in`; }
   return `${(Math.round(inch * 4) / 4).toString()} in`;
 };

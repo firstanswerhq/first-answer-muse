@@ -207,7 +207,7 @@ export function rememberHandoff(r, now = Date.now()) {
   // thumb: a small copy of the photo with SAM's masks drawn on it (owner key only on the board).
   const chk = (r.pipeline || []).filter((p) => /check SAM/.test(p.step) && p.result?.outlines).at(-1);
   const spark = chk ? { verdict: chk.result.check, seen: chk.result.outlines.map((o) => ({ color: o.color, seen: o.seen })), corrected: Boolean(r.corrected) } : null;
-  handoffs.set(id, { at: now, leadId: null, phoneSet: false, thumb: typeof r.thumb === 'string' && r.thumb.length < 400_000 ? r.thumb : null, spark, biz: { id: biz.id, name: biz.name, owner: biz.owner, trade: biz.trade || null }, task: r.task, headline: r.headline, measuredAgainst: r.measuredAgainst || null, confidence: r.confidence || null, checked: r.checked || 'skipped', block, priced });
+  handoffs.set(id, { at: now, leadId: null, phoneSet: false, thumb: typeof r.thumb === 'string' && r.thumb.length < 400_000 ? r.thumb : null, spark, biz: { id: biz.id, name: biz.name, owner: biz.owner, trade: biz.trade || null }, task: r.task, headline: r.en?.headline || r.headline, measuredAgainst: r.en?.measuredAgainst || r.measuredAgainst || null, confidence: r.confidence || null, checked: r.checked || 'skipped', block, priced });
   return { id, to: biz.name, owner: biz.owner, business: biz.id, block };
 }
 
@@ -251,8 +251,8 @@ app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
     business: h.biz.id,
     board: `/owner.html?b=${encodeURIComponent(h.biz.id)}`,
     message: esp
-      ? `Enviado a ${h.biz.name}. Ya está en el tablero de ${h.biz.owner}${masked ? ` y te escribirán al ${masked}` : '; agrega tu número si quieres que te escriban'}.`
-      : `Sent to ${h.biz.name}. It’s on ${h.biz.owner}’s board now${masked ? `, and they’ll text you at ${masked}` : '; add your number if you want them to text you back'}.`,
+      ? `Enviado a ${h.biz.name.replace(/\.$/, '')}. Ya está en el tablero de ${h.biz.owner}${masked ? ` y te escribirán al ${masked}` : '; agrega tu número si quieres que te escriban'}.`
+      : `Sent to ${h.biz.name.replace(/\.$/, '')}. It’s on ${h.biz.owner}’s board now${masked ? `, and they’ll text you at ${masked}` : '; add your number if you want them to text you back'}.`,
   });
 }));
 
