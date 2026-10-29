@@ -37,6 +37,21 @@ const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', mi
 const BIZ = new URLSearchParams(location.search).get('b');
 const FRONT_DESK = 'brightside';
 const bizOf = (l) => l.business?.id || FRONT_DESK;
+// A Sight lead: the customer's photo with SAM 3.1's masks drawn on it (owner key only), Muse Spark's
+// verdict on those masks, and the measured job.
+const COLOR_ROLE = { MAGENTA: 'measured', ORANGE: 'ruler', BLUE: 'other side' };
+function sightBlock(l) {
+  const s = l.sight;
+  const sp = s.spark;
+  const verdict = s.checked === 'agreed'
+    ? `<p class="chk ok">Muse Spark checked SAM’s masks${sp?.corrected ? ' (after correcting SAM once)' : ''} and agreed${sp?.seen ? `: ${sp.seen.map((o) => `${COLOR_ROLE[o.color] || o.color.toLowerCase()} = ${esc(o.seen)}`).join(', ')}` : ''}</p>`
+    : '<p class="chk warn">Unchecked: Muse Spark’s check of SAM’s masks didn’t come back, so measure on site before quoting</p>';
+  const photo = l.photo
+    ? `<figure class="sight-photo"><img src="${esc(l.photo)}" alt="The customer’s photo with SAM 3.1’s masks drawn on it"><figcaption>SAM 3.1’s masks: magenta = what was measured, orange = the ruler${s.task === 'gap_fit' ? ', blue = the other side' : ''}</figcaption></figure>`
+    : s.hasPhoto ? '<p class="dim">Photo with SAM’s masks: owner key only</p>' : '';
+  return `<div class="sight">${photo}<div class="sight-body">${s.headline ? `<p class="sight-head">${esc(s.headline)}</p>` : ''}<p><b>Measured from one photo:</b> ${esc(s.job)}</p>${(s.materials || []).length ? `<p>Materials: ${s.materials.map(esc).join(' · ')}</p>` : ''}<p>Quote line: ${esc(s.quote)}</p>${verdict}${s.measuredAgainst ? `<p class="dim">Measured against ${esc(s.measuredAgainst)}${s.confidence ? ` · ${esc(s.confidence)} confidence` : ''}</p>` : ''}</div></div>`;
+}
+
 function render() {
   const all = [...leads.values()].filter((l) => !BIZ || bizOf(l) === BIZ).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   $('feed').innerHTML = all.length ? all.map((l) => {
@@ -47,7 +62,7 @@ function render() {
       ${l.transcript ? `<p><i>Voicemail:</i> "${esc(l.transcript)}"</p>` : ''}
       ${l.quote ? `<p>Quoted: ${esc(l.quote.serviceName)}, ${esc(l.quote.detail)}, <b>$${l.quote.total}</b></p>` : ''}
       ${l.notes ? `<p>Crew note: ${esc(l.notes)}</p>` : ''}
-      ${l.sight ? `<div class="sight"><p><b>Measured from one photo:</b> ${esc(l.sight.job)}</p>${(l.sight.materials || []).length ? `<p>Materials: ${l.sight.materials.map(esc).join(' · ')}</p>` : ''}<p>Quote line: ${esc(l.sight.quote)}</p>${l.sight.checked === 'agreed' ? '<p class="chk ok">Muse Spark checked SAM’s outlines and agreed</p>' : '<p class="chk warn">Unchecked: Muse Spark’s check of the outlines didn’t come back, so measure on site before quoting</p>'}${l.sight.measuredAgainst ? `<p class="dim">Measured against ${esc(l.sight.measuredAgainst)}${l.sight.confidence ? ` · ${esc(l.sight.confidence)} confidence` : ''}</p>` : ''}</div>` : ''}
+      ${l.sight ? sightBlock(l) : ''}
       ${b ? `<p>Booked <b>${esc(b.when)}</b> · ${esc(b.customer)} · ${esc(b.address)} · <b>$${b.quoteTotal}</b></p>` : ''}
     </div>`;
   }).join('') : '<div class="card"><p>No leads yet. Open the customer view and send a text.</p></div>';

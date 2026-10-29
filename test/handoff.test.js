@@ -146,3 +146,18 @@ test('when Spark’s check was skipped, the lead is marked unchecked (public and
   const pub = await (await fetch(`${base}/api/owner/feed`)).json();
   assert.deepEqual(pub.leads.map((l) => l.sight.checked), ['skipped', 'agreed']);
 });
+
+test('the owner sees the photo with SAM’s masks and Spark’s verdict; the public board never gets the photo', async () => {
+  engine.reset();
+  const thumb = 'data:image/jpeg;base64,/9j/AAAA';
+  const r = { ...DRIVE, checked: 'agreed', thumb, pipeline: [{ model: 'muse-spark-1.3', step: 'check SAM’s outlines on the photo', result: { check: 'agrees', outlines: [{ color: 'MAGENTA', ok: true, seen: 'driveway' }, { color: 'ORANGE', ok: true, seen: 'garage door' }] } }] };
+  const h = rememberHandoff(r);
+  await send({ id: h.id });
+  const pub = await (await fetch(`${base}/api/owner/feed`)).json();
+  assert.doesNotMatch(JSON.stringify(pub), /base64/);
+  assert.equal(pub.leads[0].sight.hasPhoto, true);
+  assert.equal(pub.leads[0].sight.spark.verdict, 'agrees');
+  const own = await (await fetch(`${base}/api/owner/feed`, { headers: { 'x-owner-key': 'owner-secret-for-handoff' } })).json();
+  assert.equal(own.leads[0].photo, thumb);
+  assert.deepEqual(own.leads[0].sight.spark.seen, [{ color: 'MAGENTA', seen: 'driveway' }, { color: 'ORANGE', seen: 'garage door' }]);
+});
