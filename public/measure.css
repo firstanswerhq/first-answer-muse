@@ -190,6 +190,17 @@ body {
 .r-biz dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
 .r-biz p { margin: 8px 0 0; font-size: 11.5px; color: var(--mute); }
 
+/* the real hand-off: one tap puts the job on the business's owner board */
+.r-send { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.r-send input { flex: 1 1 150px; min-width: 0; background: rgba(5, 12, 26, 0.7); border: 1px solid var(--edge); color: var(--ink); border-radius: 999px; padding: 9px 13px; font: 500 14px var(--body); }
+.r-send input:focus { outline: none; border-color: rgba(46, 230, 197, 0.6); }
+.r-send button { flex: 1 1 auto; font: 700 13.5px/1.1 var(--display); letter-spacing: .02em; color: #00231c; background: linear-gradient(135deg, #5cf2c8, #2ee6c5); border: 0; border-radius: 999px; padding: 10px 14px; cursor: pointer; box-shadow: 0 0 18px rgba(46, 230, 197, .3); }
+.r-send button:disabled { opacity: .5; cursor: default; }
+.r-biz p.r-sent { font-size: 13px; line-height: 1.45; margin-top: 10px; }
+.r-sent.ok { color: var(--good); }
+.r-sent.ok a { color: #b8fff1; }
+.r-sent.bad { color: var(--err); }
+
 /* retry after an error */
 .msg.err { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .m-retry { font: 700 13px/1 var(--display); letter-spacing: .02em; color: #00202a; background: linear-gradient(135deg, #5af3ff, #2fb7ff); border: 0; border-radius: 999px; padding: 8px 14px; cursor: pointer; }

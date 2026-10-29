@@ -45,6 +45,11 @@ export const business = {
       note: 'Downspouts flushed and debris bagged and hauled away.',
     },
   },
+  // Prices for jobs measured from a Sight photo (First Answer Sight). A task without an entry here
+  // is not on this business's price list: the lead still goes to the owner, who prices it.
+  sight: {
+    surface_area: { name: 'Driveway sealing (one coat)', perSqft: 0.3, minimum: 199, note: 'Pressure wash first: same square feet at the driveway washing price.' },
+  },
   policies: [
     'No deposit needed to book. Pay when the job is done.',
     'Free reschedule up to 24 hours before the visit.',

@@ -254,14 +254,18 @@ function renderReply(r, dataUrl) {
   const biz = r.business;
   if (biz && biz.job) {
     const mats = (biz.materials || []).filter(Boolean);
-    html += `<div class="r-biz"><h4>Send to the business</h4><dl>
+    const to = r.handoff?.to || 'the business';
+    html += `<div class="r-biz"><h4>${r.handoff ? `For ${esc(to)}` : 'What the business would get'}</h4><dl>
       <div><dt>Job size</dt><dd>${esc(biz.job)}</dd></div>
       ${mats.length ? `<div><dt>Materials</dt><dd>${mats.map(esc).join('<br>')}</dd></div>` : ''}
       <div><dt>Quote</dt><dd>${esc(biz.quote)}</dd></div>
-    </dl><p>Prices come from the business’s own price list; First Answer never makes them up.</p></div>`;
+    </dl><p>${biz.priced ? `Price from ${esc(to)}’s own price list.` : `Not on ${esc(to)}’s price list yet, so the owner prices it.`} First Answer never makes prices up.</p>
+    ${r.handoff ? `<form class="r-send"><input type="tel" inputmode="tel" autocomplete="tel" placeholder="Your phone (optional)" aria-label="Your phone number, optional, so they can text you back"><button type="submit">Send this to ${esc(to)}</button></form><p class="r-sent" role="status" hidden></p>` : ''}</div>`;
   }
   body.innerHTML = html || `<p class="r-answer">${esc(FALLBACK_ERR)}</p>`;
   el.appendChild(body);
+  const sendForm = body.querySelector('.r-send');
+  if (sendForm) sendForm.addEventListener('submit', (e) => { e.preventDefault(); sendToBusiness(r.handoff, sendForm, body.querySelector('.r-sent')); });
 
   const pipe = (r.pipeline || []).filter((p) => p && p.step);
   if (pipe.length) {
@@ -299,6 +303,31 @@ function renderReply(r, dataUrl) {
   const shotImg = el.querySelector('.shot img');
   if (shotImg && !shotImg.complete) shotImg.addEventListener('load', toReply);
   requestAnimationFrame(toReply);
+}
+
+// ---------- the hand-off to the business ----------
+// Posts only the answer's id (and the optional phone); the server makes the lead from what it measured.
+async function sendToBusiness(handoff, form, out) {
+  const btn = form.querySelector('button');
+  const phone = form.querySelector('input').value.trim();
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  let r = null;
+  try {
+    const res = await fetch('/api/measure/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: handoff.id, phone }) });
+    r = await res.json().catch(() => null);
+  } catch {}
+  out.hidden = false;
+  if (r?.ok) {
+    form.remove();
+    out.className = 'r-sent ok';
+    out.innerHTML = `${esc(r.message)} <a href="/owner.html" target="_blank" rel="noopener">See the owner board</a>`;
+  } else {
+    btn.disabled = false;
+    btn.textContent = `Send this to ${handoff.to}`;
+    out.className = 'r-sent bad';
+    out.textContent = r?.ask || r?.error || 'Couldn’t send it just now. Try again in a moment.';
+  }
 }
 
 // ---------- send ----------

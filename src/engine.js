@@ -63,6 +63,26 @@ export function quote({ service, count, tier, sqft }) {
   };
 }
 
+// A Sight measurement priced from the business's own price list, or null when the job isn't on it.
+// Uses the measured square feet (the middle of the range); the quote line shows the arithmetic.
+export function sightQuote({ task, sqft }) {
+  const p = business.sight?.[task];
+  if (!p || !p.perSqft) return null;
+  const a = Math.round(Number(sqft) / 10) * 10;
+  if (!Number.isFinite(a) || a < 50 || a > 20000) return null;
+  const raw = Math.round(a * p.perSqft);
+  const total = Math.max(raw, p.minimum || 0);
+  const fmt = (n) => n.toLocaleString('en-US');
+  return {
+    serviceName: p.name,
+    detail: `about ${fmt(a)} sq ft at $${p.perSqft.toFixed(2)}/sq ft${total > raw ? ` (job minimum $${p.minimum})` : ''}`,
+    line: `${fmt(a)} sq ft × $${p.perSqft.toFixed(2)} per sq ft = $${fmt(raw)}${total > raw ? `; job minimum $${fmt(p.minimum)}` : ''} (${business.name} price list)`,
+    sqft: a,
+    total,
+    note: p.note || null,
+  };
+}
+
 // ---------- time (all in the business's own time zone) ----------
 
 const fmtParts = (d) => {

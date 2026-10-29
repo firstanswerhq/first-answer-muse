@@ -16,6 +16,7 @@ import { quoteFromPhoto, photoReply } from './photo.js';
 import { measureAnything, stepDetail, friendlyError } from './anything.js';
 import { readExif } from './distance.js';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { rateLimiter, tokenOk, redactSnapshot, metaBudgetGate, DAILY_CAP_MESSAGE } from './guard.js';
 import { hasKey, transcribeWav, openRealtimeTranscription, SPARK, BASE_URL, DIRECT_URL, RELAY_URL, relayHeaders } from './muse.js';
 
@@ -179,6 +180,47 @@ export function measureErrorMessage(e) {
   return 'Something went wrong measuring that photo; tap Retry.';
 }
 
+// ---- the hand-off: a measured job goes to the business's owner board as a lead ----
+// Each answer with a business block is remembered for a while under a random id. The customer's
+// "Send this to <business>" button posts only that id (and an optional phone number), so what lands
+// on the owner board is exactly what Sight measured, never text typed into the request.
+const HANDOFF_TTL_MS = 2 * 60 * 60 * 1000;
+const handoffs = new Map(); // id -> { r, at, leadId }
+export function rememberHandoff(r, now = Date.now()) {
+  if (!r?.ok || !r.business?.job) return null;
+  for (const [k, v] of handoffs) if (now - v.at > HANDOFF_TTL_MS || handoffs.size > 500) handoffs.delete(k); else break;
+  const id = crypto.randomBytes(12).toString('base64url');
+  const priced = r.task === 'surface_area' && r.surface ? engine.sightQuote({ task: r.task, sqft: r.surface.sqft }) : engine.sightQuote({ task: r.task });
+  const block = { ...r.business, quote: priced ? priced.line : r.business.quote, priced: Boolean(priced) };
+  handoffs.set(id, { at: now, leadId: null, task: r.task, headline: r.headline, measuredAgainst: r.measuredAgainst || null, confidence: r.confidence || null, block, priced });
+  return { id, to: business.name, owner: business.owner, block };
+}
+
+app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
+  const { id, phone } = req.body || {};
+  const h = typeof id === 'string' ? handoffs.get(id) : null;
+  if (!h || Date.now() - h.at > HANDOFF_TTL_MS) return res.status(404).json({ ok: false, ask: 'That answer has expired. Send the photo again and tap Send.' });
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (phone && (digits.length < 10 || digits.length > 15)) return res.status(400).json({ ok: false, ask: 'That phone number doesn’t look right. Leave it blank or type all 10 digits.' });
+  if (!h.leadId) {
+    const lead = engine.addLead({ channel: 'sight', phone: digits || null, summary: `Sight photo: ${h.headline}`, quote: h.priced ? { serviceName: h.priced.serviceName, detail: h.priced.detail, total: h.priced.total } : null });
+    engine.updateLead(lead.id, { sight: { task: h.task, job: h.block.job, materials: h.block.materials || [], quote: h.block.quote, measuredAgainst: h.measuredAgainst, confidence: h.confidence, priced: h.block.priced } });
+    h.leadId = lead.id;
+    broadcast('lead', lead);
+  } else if (digits) {
+    engine.updateLead(h.leadId, { phone: digits });
+    broadcast('lead', { leadId: h.leadId });
+  }
+  const masked = digits ? `•••-•••-${digits.slice(-4)}` : null;
+  res.json({
+    ok: true,
+    leadId: h.leadId,
+    to: business.name,
+    owner: business.owner,
+    message: `Sent to ${business.name}. It’s on ${business.owner}’s board now${masked ? `, and they’ll text you at ${masked}` : '; add your number if you want them to text you back'}.`,
+  });
+}));
+
 app.post('/api/measure', measureLimit, metaBudgetGate(8, live), async (req, res) => {
   const { dataUrl, text = '', exifB64 = '' } = req.body || {};
   if (!/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ ok: false, ask: 'Send a PNG, JPEG or WebP photo.' });
@@ -196,7 +238,8 @@ app.post('/api/measure', measureLimit, metaBudgetGate(8, live), async (req, res)
   try {
     const r = await measureAnything({ dataUrl, text: String(text).slice(0, 500), focal35, onStep: stream ? (s) => line({ type: 'step', ...publicStep(s) }) : null });
     broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
-    const out = { ...r, pipeline: r.pipeline.map(publicStep), lens: focal35 ? 'from photo' : 'typical phone' };
+    const handoff = rememberHandoff(r);
+    const out = { ...r, business: handoff ? handoff.block : r.business, handoff: handoff ? { id: handoff.id, to: handoff.to, owner: handoff.owner } : null, pipeline: r.pipeline.map(publicStep), lens: focal35 ? 'from photo' : 'typical phone' };
     if (stream) { line({ type: 'result', ...out }); res.end(); } else res.json(out);
   } catch (e) {
     console.error(e);

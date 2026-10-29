@@ -39,6 +39,7 @@ function render() {
       ${l.transcript ? `<p><i>Voicemail:</i> "${esc(l.transcript)}"</p>` : ''}
       ${l.quote ? `<p>Quoted: ${esc(l.quote.serviceName)}, ${esc(l.quote.detail)}, <b>$${l.quote.total}</b></p>` : ''}
       ${l.notes ? `<p>Crew note: ${esc(l.notes)}</p>` : ''}
+      ${l.sight ? `<div class="sight"><p><b>Measured from one photo:</b> ${esc(l.sight.job)}</p>${(l.sight.materials || []).length ? `<p>Materials: ${l.sight.materials.map(esc).join(' · ')}</p>` : ''}<p>Quote line: ${esc(l.sight.quote)}</p>${l.sight.measuredAgainst ? `<p class="dim">Measured against ${esc(l.sight.measuredAgainst)}${l.sight.confidence ? ` · ${esc(l.sight.confidence)} confidence` : ''}</p>` : ''}</div>` : ''}
       ${b ? `<p>Booked <b>${esc(b.when)}</b> · ${esc(b.customer)} · ${esc(b.address)} · <b>$${b.quoteTotal}</b></p>` : ''}
     </div>`;
   }).join('') : '<div class="card"><p>No leads yet. Open the customer view and send a text.</p></div>';
