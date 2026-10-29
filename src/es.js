@@ -127,8 +127,8 @@ const RULES = [
   [/^The gap is about (.+?), and (.+?) at the narrowest spot\.$/, (m) => `El espacio mide unos ${units(m[1])}, y ${units(m[2])} en la parte más angosta.`],
   [/^(.+) wide unit$/, (m) => `Unidad de ${units(m[1])} de ancho`],
   // tile
-  [/^The floor is about (.+?) by (.+?) \(([\d,.]+) sq ft\)\. In (.+?) × (.+?) in tile that’s (\d+) tiles laid, plus (\d+)% extra for cuts and mistakes: buy (\d+)\.$/, (m) =>
-    `El piso mide unos ${units(m[1])} por ${units(m[2])} (${m[3]} pies cuadrados). Con baldosas de ${m[4]} × ${m[5]} pulg. son ${m[6]} baldosas colocadas, más ${m[7]}% extra para cortes y errores: compra ${m[8]}.`],
+  [/^The floor is about (.+?) by (.+?) \(([\d,.]+) sq ft\)\. In (.+?) × (.+?) in tile that’s (\d+) tiles laid, plus (\d+)% extra for cuts and mistakes: buy (\d+) tiles\.$/, (m) =>
+    `El piso mide unos ${units(m[1])} por ${units(m[2])} (${m[3]} pies cuadrados). Con baldosas de ${m[4]} × ${m[5]} pulg. son ${m[6]} baldosas colocadas, más ${m[7]}% extra para cortes y errores: compra ${m[8]} baldosas.`],
   [/^(\d+) tiles, (.+?) × (.+?) in \(same lot number on every box\)$/, (m) => `${m[1]} baldosas de ${m[2]} × ${m[3]} pulg. (mismo número de lote en todas las cajas)`],
   [/^Start at the center of the room: (.+) across, (.+) along\.$/, (m) => `Empieza en el centro del cuarto: ${tileAxis(m[1])} a lo ancho, ${tileAxis(m[2])} a lo largo.`],
   [/^(\d+) × (edge pieces along the two side walls|edge pieces along the two end walls|corner pieces): (.+)\.$/, (m) => `${m[1]} × ${{ 'edge pieces along the two side walls': 'piezas de borde junto a las dos paredes laterales', 'edge pieces along the two end walls': 'piezas de borde junto a las dos paredes de los extremos', 'corner pieces': 'piezas de esquina' }[m[2]]}: ${es(m[3])}.`],

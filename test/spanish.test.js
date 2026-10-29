@@ -94,3 +94,13 @@ test('retake tips and refusals are translated too; unknown strings stay whole', 
   const noRuler = await run(R({ task: 'windshield_chip', target: 'chip', ruler: 'quarter' }), { chip: s.chip[1].chip });
   assert.match(noRuler.ask, /^Necesito algo de tamaño conocido al lado: pon una moneda de un cuarto de dólar/);
 });
+
+test('our own English template passes the wording check on every chip (so faithful Spark wording is used)', async () => {
+  const { checkWording, wordingFacts } = await import('../src/anything.js');
+  for (const [name, [read, by]] of Object.entries(scenes())) {
+    const r = await run({ ...read, language: 'en' }, by, 'how big');
+    const f = wordingFacts(r);
+    const text = r.verdictSentence ? 'Book a visit this week.' : r.answer;
+    assert.deepEqual(checkWording(text, f, r.headline, { task: r.task }), { ok: true }, `${name}: ${text}`);
+  }
+});
