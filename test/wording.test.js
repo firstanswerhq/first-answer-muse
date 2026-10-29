@@ -18,7 +18,7 @@ test('numbers are read the same way on both sides', () => {
 
 test('the check passes faithful wording and catches every changed, added or spelled-out number', () => {
   const facts = { headline: 'About 430 sq ft', numbers: ['Area: 430 sq ft', 'Range: 380 – 480 sq ft', 'Concrete sealer: 3 gallons per coat'], next_steps: ['Clean it first: pressure wash and let it dry 24 hours.'] };
-  assert.equal(checkWording('Your driveway is about 430 sq ft (380 to 480). Get 3 gallons of concrete sealer per coat, and pressure wash it 24 hours before.', facts, facts.headline).ok, true);
+  assert.equal(checkWording('Your driveway is about 430 sq ft (380 to 480 sq ft). Get 3 gallons of concrete sealer per coat, and pressure wash it 24 hours before.', facts, facts.headline).ok, true);
   assert.match(checkWording('Your driveway is about 440 sq ft.', facts, facts.headline).reason, /440/);
   assert.match(checkWording('About 430 sq ft; buy 4 gallons.', facts, facts.headline).reason, /4\b/);
   assert.match(checkWording('About 430 sq ft; buy three gallons.', facts, facts.headline).reason, /three/);
@@ -34,11 +34,16 @@ test('Spark wording is used when every number is ours, and the page is told so',
     gotFacts = JSON.parse(facts);
     assert.match(system, /never round, convert/i);
     const size = gotFacts.numbers.find((n) => n.startsWith('Chip size')).split(': ')[1];
-    return `Good news: that chip is ${size}, smaller than a quarter, so it can usually be repaired. Put clear tape over it and get it fixed soon.`;
+    assert.ok(size);
+    assert.match(system, /already written/);
+    assert.equal(gotFacts.template_answer, undefined);
+    return 'Put clear tape over it and book a visit this week.';
   });
   assert.equal(r.ok, true, r.ask);
   assert.equal(r.wording, 'spark');
-  assert.match(r.answer, /^Good news/);
+  // Our verdict sentence first, locked; Spark's next step after it.
+  assert.equal(r.answer, `${r.verdictSentence} Put clear tape over it and book a visit this week.`);
+  assert.match(gotFacts.first_sentence_already_written, /smaller than a quarter/);
   assert.match(r.answerTemplate, /smaller than a quarter/);
   assert.equal(gotFacts.measured_against, 'quarter (24.26 mm)');
   const step = r.pipeline.at(-1);
@@ -134,23 +139,28 @@ test('a number with the wrong unit fails: 2 gallons when 2 is the pail count', (
   assert.match(checkWording('It is 18 × 24 sq ft, 420 sq ft in all.', DRIVE, DRIVE.headline).reason, /unit not ours/);
 });
 
-test('a flipped verdict fails: “Repair it” reworded to replace', () => {
-  assert.equal(checkWording(CHIP.template_answer, CHIP, CHIP.headline).ok, true);
-  assert.equal(checkWording('Good news: that 0.5 in chip is smaller than a quarter, so it can usually be repaired. Put clear tape over it.', CHIP, CHIP.headline).ok, true);
-  assert.equal(checkWording('That 0.5 in chip is bigger than a quarter, so replace the windshield.', CHIP, CHIP.headline).ok, false);
-  assert.match(checkWording('That 0.5 in chip is bigger than a quarter, so skip the repair and replace the windshield.', CHIP, CHIP.headline).reason, /opposite of “repair”/);
-  const REPL = { headline: 'Replace it', template_answer: 'That crack is 8 in — longer than 6 in, so most shops will say replace the windshield.', numbers: ['Crack length: 8 in', 'Repair limit: 6 in'] };
-  assert.equal(checkWording(REPL.template_answer, REPL, REPL.headline).ok, true);
-  assert.match(checkWording('That 8 in crack can usually be repaired, no need to replace it.', REPL, REPL.headline).reason, /opposite/);
+test('on a verdict task Spark may not use verdict words, negations or comparisons at all', () => {
+  const c = { ...CHIP, task: 'windshield_chip' };
+  for (const t of ['I would not repair it.', 'Repair is not an option, get new glass.', 'Skip the repair and get a new windshield.', 'Hay que reemplazarlo; repararlo no sirve.', 'Reparar no es posible.', 'Good news: it can usually be repaired.', 'It is under 1 in.', 'Get it swapped soon.'])
+    assert.match(checkWording(t, c, c.headline).reason, /verdict word/, t);
+  assert.equal(checkWording('Put clear tape over it and book a visit this week.', c, c.headline).ok, true);
+  assert.equal(checkWording('Ponle cinta transparente y llévalo al taller esta semana.', c, c.headline).ok, true);
 });
 
-test('fits / tight / won’t fit must be said, never contradicted', () => {
-  const f = (headline) => ({ headline, numbers: ['Narrowest: 13 ft 2 in', 'Needs: 12 ft'] });
-  assert.equal(checkWording('The narrowest spot is 13 ft 2 in, so a 12 ft shed fits.', f('Fits'), 'Fits').ok, true);
-  assert.equal(checkWording('The narrowest spot is 13 ft 2 in, so a 12 ft shed won’t fit.', f('Fits'), 'Fits').ok, false);
-  assert.equal(checkWording('At 13 ft 2 in it fits, but it’s tight.', f('Fits, but tight'), 'Fits, but tight').ok, true);
-  assert.equal(checkWording('At 13 ft 2 in a 12 ft shed won’t fit.', f('Won’t fit'), 'Won’t fit').ok, true);
-  assert.match(checkWording('At 13 ft 2 in, the 12 ft shed will fit.', f('Won’t fit'), 'Won’t fit').reason, /verdict|opposite/);
+test('fits / tight / won’t fit: the verdict sentence is ours, Spark can’t say one either way', () => {
+  const f = (headline) => ({ task: 'gap_fit', headline, numbers: ['Narrowest: 13 ft 2 in', 'Needs: 12 ft'] });
+  for (const [h, t] of [['Fits, but tight', 'It is not tight at all: a 12 ft shed has room in 13 ft 2 in.'], ['Fits', 'A 12 ft shed is not going to fit in 13 ft 2 in.'], ['Won’t fit', 'At 13 ft 2 in, the 12 ft shed will fit.'], ['Fits', 'Un cobertizo de 12 pies no entra en 13 pies 2 pulgadas.'], ['Fits', 'Un cobertizo de 12 pies cabe.']])
+    assert.equal(checkWording(t, f(h), h).ok, false, t);
+  assert.equal(checkWording('Tape the spot before you buy.', f('Fits'), 'Fits').ok, true);
+  // Without a verdict (no shed width typed) the narrowest number must still be there.
+  assert.match(checkWording('Tape the spot.', f('13 ft 2 in at the narrowest'), '13 ft 2 in at the narrowest').reason, /main number/);
+});
+
+test('allowlist: unknown units, vague quantities and decimal commas fail', () => {
+  for (const t of ['Your driveway is about 420 sq ft, about 18 by 24 meters.', 'Your driveway is about 420 sq ft, about 24 yards long.', 'Your driveway is about 420 sq ft. Wait 3 days before sealing.', 'Your driveway is about 420 sq ft, give or take 50.', 'Your driveway is about 420 sq ft. Buy a couple of gallons.', 'Your driveway is about 420 sq ft. Buy a few pails.', 'Tu entrada mide unos 420,5 pies cuadrados.', 'Tu entrada mide unos 420 pies cuadrados, entre 370 y 470.'])
+    assert.equal(checkWording(t, DRIVE, DRIVE.headline).ok, false, t);
+  assert.match(checkWording('Your driveway is about 420 sq ft, about 24 yards long.', DRIVE, DRIVE.headline).reason, /without a unit/);
+  assert.equal(checkWording('Your driveway is about 420 sq ft. Let it dry 24 hours, then apply 3 gallons of concrete sealer.', DRIVE, DRIVE.headline).ok, true);
 });
 
 test('men’s and women’s shoe sizes swapped fails', () => {
@@ -161,9 +171,8 @@ test('men’s and women’s shoe sizes swapped fails', () => {
 });
 
 test('numbers with units are read the same in Spanish', () => {
-  assert.equal(checkWording('Tu entrada mide unos 420 pies cuadrados (entre 370 y 470). Compra 3 galones de sellador para concreto o 2 cubetas de cinco galones de sellador para asfalto por capa.', DRIVE, DRIVE.headline).ok, true);
+  assert.equal(checkWording('Tu entrada mide unos 420 pies cuadrados (entre 370 y 470 pies cuadrados). Compra 3 galones de sellador para concreto o 2 cubetas de cinco galones de sellador para asfalto por capa.', DRIVE, DRIVE.headline).ok, true);
   assert.match(checkWording('Tu entrada mide unos 420 pies cuadrados. Compra 2 galones de sellador.', DRIVE, DRIVE.headline).reason, /2 gallons/);
-  assert.equal(checkWording('Esa grieta de 0.5 in es más pequeña que una moneda de un cuarto de dólar, así que se puede reparar.', CHIP, CHIP.headline).ok, true);
   assert.equal(checkWording('Tu pie mide 10.5 pulgadas: talla 10.5 de hombre o 12 de mujer, más o menos EU 44.', SHOE, SHOE.headline).ok, true);
 });
 
@@ -179,4 +188,16 @@ test('the public panel never shows raw upstream errors; a Spark timeout says why
   assert.equal(stepDetail(slow.pipeline.at(-1)), 'kept our template (no reply in 0.3 s)');
   const broken = await run(async () => { throw new Error('Meta 503: <html>upstream body</html>'); });
   assert.equal(stepDetail(broken.pipeline.at(-1)), 'kept our template (Meta’s server had a hiccup (503))');
+});
+
+// Every bad case from review pass 2's fuzz scripts (scratchpad meta-review2/fuzz.mjs, fuzz2.mjs).
+test('review pass 2 fuzz cases all fail', () => {
+  const drive = ['Your driveway is about 420 sq ft, roughly 39 square meters. Buy 3 gallons.', 'Your driveway is about 420 sq ft (18 × 24 ft = 432). Buy 3 gallons.', 'Your driveway is about 420 sq ft. That is 2 coats of 3 gallons, so 6 gallons total.', 'Your driveway is about 420 sq ft. Buy 3 gallons per coat; two coats need twice that.', 'Your driveway is about 420 sq ft. Buy 2 gallons of concrete sealer.', 'Your driveway is about 420 sq ft. Buy 3 pails of asphalt sealer.', 'Your driveway is about 420 sq ft, about 18 by 24 meters.', 'Your driveway is about 420 sq ft, about 24 yards long.', 'Your driveway is about 420 square yards.', 'Your driveway is about 420 sq ft; sealing costs about 126 dollars.', 'Your driveway is about 420 sq ft; sealing runs about USD 126.', 'Your driveway is about 420 sq ft. Expect to pay 199 bucks minimum.', 'Your driveway is about 420 sq ft, give or take 50.', 'Your driveway is about 420 sq ft, plus or minus 12%.', 'Your driveway is about 420 sq ft. Buy a couple of gallons.', 'Your driveway is about 420 sq ft. Buy a few pails.', 'Your driveway is about four hundred twenty sq ft.', 'Your driveway is about 420 sq ft. Wait 3 days before sealing.', 'Tu entrada mide unos 420 pies cuadrados, entre 370 y 470. Necesitas 3 galones.', 'Tu entrada mide unos 420,5 pies cuadrados. Necesitas 3 galones.', 'Tu entrada mide unos 420 pies cuadrados, unos 39 metros cuadrados.', 'Tu entrada mide unos 420 pies cuadrados. Necesitas 3 cubetas de sellador para concreto.', 'Tu entrada mide 420 pies cuadrados. Compra 2 galones.', 'Tu entrada mide 420 pies. Compra 3 galones.', 'Your driveway is about 470 sq ft. Buy 3 gallons.', 'Your driveway is about 4 20 sq ft.', 'Your driveway is 420 sq ft, which is 0.01 acres.', 'Your driveway is about 420 sq ft. Call us at 615-555-0100.', 'Your driveway is about 420 sq ft. Visit brightside.example/promo for 20 off.'];
+  for (const t of drive) assert.equal(checkWording(t, DRIVE, DRIVE.headline).ok, false, t);
+  const chip = { ...CHIP, task: 'windshield_chip', numbers: ['Chip size: 0.56 in', 'Range: 0.54 in – 0.58 in (±4%)', 'Repair limit: 1 in (a quarter)'] };
+  const chipCases = ['That chip is 0.56 in, smaller than a quarter, so it can usually be repaired.', 'That chip is 0.56 in. Don’t replace the windshield; repair it.', 'That chip is 0.56 in. You should replace it, not repair it.', 'That chip is 0.56 in. Do not repair it; replace the windshield.', 'That chip is 0.56 in. Repair is not an option, get new glass.', 'That chip is 0.56 in. I would not repair it.', 'That chip is 0.56 in. Skip the repair and get a new windshield.', 'That chip is 0.56 in, about 14 mm. Repair it.', 'That chip is 0.56 in, about 1.4 cm, so repair it.', 'That chip is 0.56 in. Repair it within 1 in.', 'That chip is half an inch, so repair it.', 'That chip is 0.56 in. Repair it; a quarter is 1 in.', 'Esa grieta mide 0,56 pulgadas, así que se puede reparar.', 'Esa grieta mide 0.56 pulgadas. No lo repare, reemplácelo.', 'Esa grieta mide 0.56 pulgadas. Se puede reparar, no lo reemplace.', 'Esa grieta mide 0.56 pulgadas. Hay que reemplazarlo; repararlo no sirve.', 'Esa grieta mide 0.56 pulgadas. Reparar no es posible.', 'That chip is 0.56 mm. Repair it.', 'That chip is 0.56 in. Repair it. Replace the windshield if it spreads.'];
+  for (const t of chipCases) assert.equal(checkWording(t, chip, chip.headline).ok, false, t);
+  const mk = (h) => ({ task: 'gap_fit', headline: h, numbers: ['Narrowest: 12 ft 2 in', 'Typical: 12 ft 6 in', 'Needs: 12 ft'] });
+  for (const [h, t] of [['Fits, but tight', 'A 12 ft shed fits, but it is tight: 12 ft 2 in at the narrowest.'], ['Fits, but tight', 'A 12 ft shed fits easily with 12 ft 2 in at the narrowest.'], ['Fits, but tight', 'It is not tight at all: a 12 ft shed has room in 12 ft 2 in.'], ['Fits', 'A 12 ft shed is not going to fit in 12 ft 2 in.'], ['Fits', 'A 12 ft shed fits? No. The gap is 12 ft 2 in.'], ['Won’t fit', 'A 12 ft shed won’t fit... just kidding, it fits in 12 ft 2 in.'], ['Won’t fit', 'A 12 ft shed can’t fit in 12 ft 2 in.'], ['Fits', 'Un cobertizo de 12 pies no entra en 12 pies 2 pulgadas.'], ['Fits', 'Un cobertizo de 12 pies cabe en 12 pies 2 pulgadas.']])
+    assert.equal(checkWording(t, mk(h), h).ok, false, t);
 });

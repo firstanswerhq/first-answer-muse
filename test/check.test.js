@@ -118,13 +118,14 @@ test('Spanish question, Spanish answer: numbers and units still checked against 
   let system = '';
   const r = await run(agree, { read: es, word: async (sys, facts) => {
     system = sys;
-    const size = JSON.parse(facts).numbers.find((n) => n.startsWith('Chip size')).split(': ')[1].replace(' in', ' pulgadas');
-    return `Buenas noticias: esa grieta mide ${size}, más pequeña que una moneda de un cuarto de dólar, así que se puede reparar. Ponle cinta transparente y llévalo pronto al taller.`;
+    assert.ok(JSON.parse(facts).first_sentence_already_written);
+    return 'Ponle cinta transparente y llévalo pronto al taller.';
   } });
   assert.match(system, /Write the message in Spanish/);
   assert.equal(r.wording, 'spark');
   assert.equal(r.language, 'es');
-  assert.match(r.answer, /^Buenas noticias/);
+  assert.ok(r.answer.startsWith(r.verdictSentence));
+  assert.match(r.answer, /Ponle cinta transparente y llévalo pronto al taller\.$/);
   assert.match(stepDetail(r.pipeline.find((p) => /word the answer/.test(p.step))), /used \(Spanish\)/);
   // A Spanish reply that flips the verdict or changes a number keeps the (English) template.
   const flipped = await run(agree, { read: es, word: async () => 'Esa grieta es más grande que una moneda, así que hay que cambiar el parabrisas.' });

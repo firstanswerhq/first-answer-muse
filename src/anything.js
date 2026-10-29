@@ -371,6 +371,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
           materials: itemFt ? [`${ftIn(itemFt)} wide shed kit`, 'Gravel or paver pad, a little bigger than the shed'] : ['Depends on what goes in the gap'],
           quote: 'Install: $X per shed + $Y per sq ft of pad (set by the business)',
         },
+        verdictSentence: fit ? fit.text : null,
         answer: fit ? fit.text : `The gap is about ${ftIn(g.typical.ft)}, and ${ftIn(g.tightest.ft)} at the narrowest spot.`,
         numbers: [
           { label: 'Narrowest', value: ftIn(g.tightest.ft) },
@@ -440,6 +441,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
         ? { job: `Windshield ${v.kind} repair: ${inchStr(m.lengthMm)} ${v.kind}`, materials: ['Resin repair kit'], quote: '$X per chip repair (set by the business)' }
         : { job: `Windshield replacement: ${inchStr(m.lengthMm)} ${v.kind}`, materials: ['Windshield glass', 'Camera recalibration if the car has lane or collision cameras'], quote: '$X per windshield + $Y recalibration (set by the business)' },
       answer: v.text,
+      verdictSentence: v.text,
       numbers: [{ label: v.kind === 'crack' ? 'Crack length' : 'Chip size', value: inchStr(m.lengthMm) }, { label: 'Range', value: `${rangeIn(m.lengthMm, pm)} (±${pmPct}%)` }, { label: 'Repair limit', value: v.kind === 'crack' ? '6 in' : '1 in (a quarter)' }],
       shopping: v.repair ? ['Windshield chip repair (many insurers cover it — check your policy)'] : ['Windshield replacement'],
       steps: v.repair ? ['Put clear tape over it to keep dirt out.', 'Skip the car wash and blasting the defroster until it’s fixed.', 'Get it repaired soon — chips spread with heat and bumps.'] : ['Get two quotes; ask if your insurance covers glass.', 'If your car has lane or collision cameras, ask about recalibration.'],
@@ -659,6 +661,8 @@ const SUFFIX_UNITS = [
   ['in', /^\s*(?:in\b(?!\s+(?:the|a|an|your|tile|it|one|two)\b)|inch(?:es)?\b|"|″|pulgadas?\b)/i],
   ['ft', /^\s*(?:ft\b|feet\b|foot\b|'|′|pies?\b)/i],
   ['pct', /^\s*(?:%|percent\b|por\s*ciento\b)/i],
+  ['hour', /^\s*(?:hours?\b|hrs?\b|horas?\b)/i],
+  ['degF', /^\s*(?:°\s*F\b|degrees?\s+F(?:ahrenheit)?\b|grados?\s+F(?:ahrenheit)?\b)/i],
   ['men', new RegExp(`^\\s*(?:men${APOS}?s\\b|(?:de\\s+)?(?:hombre|caballero)s?\\b)`, 'i')],
   ['women', new RegExp(`^\\s*(?:women${APOS}?s\\b|(?:de\\s+)?(?:mujer|dama|señora)s?\\b)`, 'i')],
 ];
@@ -668,6 +672,7 @@ const PREFIX_UNITS = [
   ['men', new RegExp(`(?:men${APOS}?s|hombres?|caballeros?)\\s*:?\\s*(?:size\\s+|talla\\s+)?$`, 'i')],
   ['eu', /\b(?:EU|UE)\s*:?\s*(?:size\s+|talla\s+)?$/i],
   ['us', /\b(?:US|EE\.?\s*UU\.?)\s*:?\s*(?:size\s+|talla\s+)?$/i],
+  ['tiles', /\b(?:tiles?|baldosas?)\s*:\s*$/i],
 ];
 // "between 370 and 470 sq ft", "370 – 470 sq ft", "de 370 a 470 pies": the first number takes the second's unit.
 // "18 × 24 ft" and "18 by 24 ft" too.
@@ -705,31 +710,49 @@ export function numberUnits(text) {
   return out.map(({ n, unit }) => ({ n, unit }));
 }
 
-// The verdict a headline gives, and the words that would say the opposite (English and Spanish).
+// The verdict a headline gives (repair / replace, fits / tight / won't fit / too close to call).
 const VERDICTS = [
-  { when: /^repair it/i, name: 'repair',
-    need: /\brepair|\brepar(?:a|ar|arse|ación|able)/i,
-    against: /\breplace (?:it|the|your)\b|\bneeds? (?:a )?(?:new|replacing|replacement)\b|bigger than a quarter|larger than a quarter|longer than 6 in|can(?:no|’|')t be repaired|not repairable|\bcambi(?:ar|e) (?:el|todo el) parabrisas|\breemplaz(?:ar|e|o) (?:el|todo el) parabrisas|más grande que una moneda|no se puede reparar/i },
-  { when: /^replace it/i, name: 'replace',
-    need: /\breplac|\breemplaz|\bcambi(?:ar|o|e)\b/i,
-    against: /\bcan (?:usually )?be repaired|\brepair it\b|smaller than a quarter|under 6 in|se puede reparar|más pequeñ[oa] que una moneda|menor que una moneda/i },
-  { when: /^won[’']t fit/i, name: 'won’t fit',
-    need: /won[’']?t fit|will not fit|does(?:n[’']?t| not) fit|no (?:va a )?cab(?:e|rá)/i,
-    against: /\b(?:it|shed|unit|that|this) (?:will |should )?fits?\b|\bwill fit\b|plenty of room|\bsí cabe\b|(?<!no )\bcabe bien\b/i },
-  { when: /^fits, but tight/i, name: 'tight',
-    need: /\btight|\bjust (?:barely )?fits|justo|apretad/i,
-    against: /won[’']?t fit|will not fit|does(?:n[’']?t| not) fit|plenty of room|no cabe|no va a caber|de sobra/i },
-  { when: /^fits\b/i, name: 'fits',
-    need: /\bfits?\b|\bcabe\b|\bcabrá\b/i,
-    against: /won[’']?t fit|will not fit|does(?:n[’']?t| not) fit|\btoo (?:narrow|small|tight)\b|\btight\b|no cabe|no va a caber|no cabrá|apretad/i },
+  { when: /^repair it/i, name: 'repair' },
+  { when: /^replace it/i, name: 'replace' },
+  { when: /^won[’']t fit/i, name: 'won’t fit' },
+  { when: /^fits, but tight/i, name: 'tight' },
+  { when: /^fits\b/i, name: 'fits' },
+  { when: /^too close to call/i, name: 'too close to call' },
 ];
 export const verdictOf = (headline) => VERDICTS.find((v) => v.when.test(String(headline || ''))) || null;
 
-// Is Spark's wording safe to show? Every number (and number word) must come from our facts, with the
-// same unit it has there ("2 gallons" is wrong when 2 is the pail count); the headline's main number
-// must be there with its unit; a verdict headline (repair / replace, fits / tight / won't fit) must be
-// said and never contradicted; and it must be short plain text.
-export function checkWording(text, facts, headline = '') {
+// The verdict sentence is ours (the template's, locked); Spark only writes what comes after it.
+// Word-matching negation is a losing game ("I would not repair it", "Skip the repair"), so on these
+// tasks Spark's text may not use a verdict word of either polarity, a negation or a comparison at all.
+export const VERDICT_TASKS = new Set(['windshield_chip', 'gap_fit']);
+const VERDICT_WORDS = new RegExp([
+  // English: repair / replace and friends, fit / tight and friends, the glass itself
+  String.raw`repair\w*|fix\w*|mend\w*|patch\w*|replac\w*|swap\w*|new|glass|windshield\w*|crack\w*|spread\w*|fit\w*|tight\w*|snug\w*|room\w*|space\w*|squeez\w*|clearance|cramped|plenty|enough|wide|narrow\w*|big\w*|small\w*|larg\w*|limit\w*|okay|ok|fine|safe|bad|worth|option\w*|skip\w*|instead|rather`,
+  // negations and comparisons
+  String.raw`not|no|never|none|nothing|nor|cannot|\w+n[’']t|than|too`,
+  // Spanish
+  String.raw`repar\w*|arregl\w*|reemplaz\w*|cambi\w*|nuev\w*|vidrio\w*|cristal\w*|parabrisas|grieta\w*|cab(?:e|en|er|rá|ría|ía)|quep\w*|entr(?:a|an|ar|ará|aría)|justo|justa|apretad\w*|espacio|sobra\w*|holgad\w*|suficiente\w*|ancho\w*|estrech\w*|grande\w*|pequeñ\w*|menor\w*|mayor\w*|demasiad\w*|límite|nunca|jamás|tampoco|ni|mejor|peor`,
+].join('|'), 'iu');
+const VERDICT_WORD_RE = new RegExp(`(?<![\\p{L}\\d])(?:${VERDICT_WORDS.source})(?![\\p{L}\\d])`, 'iu');
+// A comparison with a size or the limit ("under 6 in", "more than a quarter", "bajo el límite").
+const COMPARE_RE = /(?<![\p{L}])(?:under|over|above|below|beyond|past|within|more|less|bajo|sobre|encima|debajo|dentro|más|menos)\s+(?:(?:the|a|an|el|la|una?|de|del)\s+)?(?:\d|limit|quarter|moneda|cuarto|límite)/iu;
+export function verdictWordIn(text) {
+  const t = String(text || '');
+  const m = t.match(VERDICT_WORD_RE) || t.match(COMPARE_RE);
+  return m ? m[0] : null;
+}
+
+// Vague quantities stand in for a number without being one ("a couple of gallons", "a few pails").
+const VAGUE = /(?<![\p{L}])(?:a couple|couple of|a few|few|several|many|lots? of|a lot|handful|dozens|give or take|plus or minus|or so|unos cuantos|unas cuantas|un par|varios|varias|muchos|muchas|algunos|algunas|bastantes|más o menos unos)(?![\p{L}])/iu;
+
+// Is Spark's wording safe to show?
+//  - Allowlist: every number must carry a unit we know, and that exact number + unit pair must be in
+//    our facts ("18 by 24 meters", "24 yards", "wait 3 days" all fail: no known unit). Number words,
+//    vague quantities and money fail. Spanish decimal commas ("0,56") fail (no unit on the "0").
+//  - On a verdict task the verdict sentence is ours, prepended by the caller; Spark's text must use no
+//    verdict word, negation or comparison (either language). Elsewhere the headline's main number and
+//    unit must be there. Short plain text only.
+export function checkWording(text, facts, headline = '', { task = facts?.task } = {}) {
   const t = String(text || '').trim();
   if (!t) return { ok: false, reason: 'empty' };
   if (t.length > 700) return { ok: false, reason: 'too long' };
@@ -739,42 +762,51 @@ export function checkWording(text, facts, headline = '') {
   const bad = numbersIn(t).filter((n) => !allowed.has(n));
   if (bad.length) return { ok: false, reason: `numbers not ours: ${[...new Set(bad)].join(', ')}` };
   const factPairs = new Set(numberUnits(factText).map((p) => `${p.n} ${p.unit}`));
-  const wrongUnit = numberUnits(t).filter((p) => p.unit && !factPairs.has(`${p.n} ${p.unit}`));
+  const pairs = numberUnits(t);
+  const noUnit = pairs.filter((p) => !p.unit);
+  if (noUnit.length) return { ok: false, reason: `number without a unit we know: ${[...new Set(noUnit.map((p) => p.n))].join(', ')}` };
+  const wrongUnit = pairs.filter((p) => !factPairs.has(`${p.n} ${p.unit}`));
   if (wrongUnit.length) return { ok: false, reason: `unit not ours: ${[...new Set(wrongUnit.map((p) => `${p.n} ${UNIT_NAME[p.unit]}`))].join(', ')}` };
   const factWords = new Set([...factText.matchAll(NUMBER_WORDS)].map((m) => m[0].toLowerCase()));
   // "cubetas de cinco galones" is how Spanish says the facts' "five-gallon pails".
   const tWords = /five[- ]gallon/i.test(factText) ? t.replace(/cubetas?\s+de\s+cinco\s+galones/gi, 'pails') : t;
   const badWords = [...tWords.matchAll(NUMBER_WORDS)].map((m) => m[0].toLowerCase()).filter((w) => !factWords.has(w));
   if (badWords.length) return { ok: false, reason: `number words not ours: ${[...new Set(badWords)].join(', ')}` };
-  if (/\$|€|£/.test(t) && !/\$|€|£/.test(factText)) return { ok: false, reason: 'money' };
+  const vague = t.match(VAGUE);
+  if (vague) return { ok: false, reason: `vague quantity: ${vague[0]}` };
+  if (/\$|€|£|\b(?:usd|dollars?|bucks|d[oó]lares|pesos|cents?)\b/i.test(t) && !/\$|€|£/.test(factText)) return { ok: false, reason: 'money' };
+  if (VERDICT_TASKS.has(task) || verdictOf(headline)) {
+    const w = verdictWordIn(t);
+    if (w) return { ok: false, reason: `verdict word “${w}” (the verdict sentence is ours)` };
+    if (verdictOf(headline)) return { ok: true }; // our verdict sentence carries the main number
+  }
   const main = numberUnits(headline)[0];
   if (main) {
-    const said = numberUnits(t);
-    if (!said.some((p) => p.n === main.n)) return { ok: false, reason: 'left out the main number' };
-    if (main.unit && !said.some((p) => p.n === main.n && p.unit === main.unit)) return { ok: false, reason: `main number without its unit (${UNIT_NAME[main.unit]})` };
-  }
-  const v = verdictOf(headline);
-  if (v) {
-    if (!v.need.test(t)) return { ok: false, reason: `left out the verdict (${v.name})` };
-    if (v.against.test(t)) return { ok: false, reason: `says the opposite of “${v.name}”` };
+    if (!pairs.some((p) => p.n === main.n)) return { ok: false, reason: 'left out the main number' };
+    if (main.unit && !pairs.some((p) => p.n === main.n && p.unit === main.unit)) return { ok: false, reason: `main number without its unit (${UNIT_NAME[main.unit]})` };
   }
   return { ok: true };
 }
-const UNIT_NAME = { sqft: 'sq ft', sqin: 'sq in', pail: 'pails', gallon: 'gallons', tiles: 'tiles', mm: 'mm', cm: 'cm', in: 'in', ft: 'ft', pct: '%', men: 'men’s', women: 'women’s', eu: 'EU', us: 'US' };
+const UNIT_NAME = { sqft: 'sq ft', sqin: 'sq in', pail: 'pails', gallon: 'gallons', tiles: 'tiles', mm: 'mm', cm: 'cm', in: 'in', ft: 'ft', pct: '%', men: 'men’s', women: 'women’s', eu: 'EU', us: 'US', hour: 'hours', degF: '°F' };
 
 export function wordingFacts(r) {
+  // On a verdict task Spark gets only material without verdict words, so it has nothing to flip.
+  const clean = VERDICT_TASKS.has(r.task) ? (list) => list.filter((x) => !verdictWordIn(x)) : (list) => list;
   return {
     task: r.task,
     headline: r.headline,
-    template_answer: r.answer,
+    ...(r.verdictSentence ? { first_sentence_already_written: r.verdictSentence } : { template_answer: r.answer }),
     numbers: (r.numbers || []).map((n) => `${n.label}: ${n.value}`),
-    what_to_buy: (r.shopping || []).slice(0, 3),
-    next_steps: (r.steps || []).slice(0, 3),
+    what_to_buy: clean((r.shopping || []).slice(0, 3)),
+    next_steps: clean((r.steps || []).slice(0, 3)),
     measured_against: r.measuredAgainst || null,
     confidence: r.confidence,
-    tip: r.ask || null,
+    tip: r.ask && !(VERDICT_TASKS.has(r.task) && verdictWordIn(r.ask)) ? r.ask : null,
   };
 }
+
+export const WORD_PROMPT_LOCKED = `
+The first sentence, with the verdict, is already written (first_sentence_already_written) and is sent before your text. Write only 1 or 2 short sentences that come after it: the most useful next step. Do not repeat, restate or comment on the verdict. Do not use the words repair, replace, fix, fit, tight, room, glass or windshield, any negation (not, no, never, don't, won't) or any comparison (than, too, under, over), in English or Spanish.`;
 
 async function wordAnswer(r, live, pipeline, timeoutMs = WORD_TIMEOUT_MS) {
   const facts = wordingFacts(r);
@@ -787,12 +819,13 @@ async function wordAnswer(r, live, pipeline, timeoutMs = WORD_TIMEOUT_MS) {
   let timer;
   try {
     const text = await Promise.race([
-      live.word(lang === 'es' ? WORD_PROMPT + WORD_PROMPT_ES : WORD_PROMPT, JSON.stringify(facts)),
+      live.word(WORD_PROMPT + (r.verdictSentence ? WORD_PROMPT_LOCKED : '') + (lang === 'es' ? WORD_PROMPT_ES : ''), JSON.stringify(facts)),
       new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no reply in ${timeoutMs / 1000} s`)), timeoutMs); }),
     ]);
-    const check = checkWording(text, facts, r.headline);
+    const check = checkWording(text, facts, r.headline, { task: r.task });
     if (check.ok) {
-      r.answer = String(text).trim();
+      // The verdict sentence is ours, always first; Spark's text follows it.
+      r.answer = r.verdictSentence ? `${r.verdictSentence} ${String(text).trim()}` : String(text).trim();
       r.wording = 'spark';
       r.language = lang;
       pipeline.add({ ...step, ms: ms(), result: { used: true, numbersChecked: numbersIn(text).length, language: lang } });
