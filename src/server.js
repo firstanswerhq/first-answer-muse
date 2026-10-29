@@ -13,7 +13,7 @@ import { business } from './business.js';
 import * as engine from './engine.js';
 import { handleMessage, addNote, getThread } from './agent.js';
 import { quoteFromPhoto, photoReply } from './photo.js';
-import { measureAnything } from './anything.js';
+import { measureAnything, stepDetail } from './anything.js';
 import { readExif } from './distance.js';
 import fs from 'node:fs';
 import { rateLimiter, tokenOk, redactSnapshot } from './guard.js';
@@ -156,15 +156,47 @@ app.post('/api/photo', deskLimit, safe(async (req, res) => {
 }));
 
 // ---- measure anything: one photo + one line of text ----
-app.post('/api/measure', measureLimit, safe(async (req, res) => {
+// What the page sees of each step: which model, what it did, how long, and its real numbers
+// (SAM's outline counts and confidence, Spark's read, our math's result) as one readable line.
+const publicStep = (s) => ({ model: s.model, step: s.step, failed: Boolean(s.error), ms: s.ms ?? null, detail: stepDetail(s), objects: s.result?.objects || undefined });
+
+// Errors in words a person can act on.
+export function measureErrorMessage(e) {
+  const m = String(e?.message || e || '');
+  if (/SAM \d|sam-3/i.test(m)) return 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.';
+  if (/timed? ?out|timeout|aborted|ETIMEDOUT/i.test(m)) return 'The Meta models took too long to answer; tap Retry.';
+  if (/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|network|socket/i.test(m)) return 'Couldn’t reach the Meta models; tap Retry.';
+  if (/\b(401|403)\b|api key|unauthori[sz]ed/i.test(m)) return 'The Meta models turned this server away just now. We’re on it; try again in a few minutes.';
+  if (/\b429\b|rate limit/i.test(m)) return 'The Meta models are busy right now; wait a moment and tap Retry.';
+  if (/\b5\d\d\b/.test(m)) return 'The Meta models had a hiccup; tap Retry.';
+  return 'Something went wrong measuring that photo; tap Retry.';
+}
+
+app.post('/api/measure', measureLimit, async (req, res) => {
   const { dataUrl, text = '', exifB64 = '' } = req.body || {};
   if (!/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ ok: false, ask: 'Send a PNG, JPEG or WebP photo.' });
   let focal35 = null;
   try { if (exifB64) focal35 = readExif(Buffer.from(exifB64, 'base64')).focal35 || null; } catch {}
-  const r = await measureAnything({ dataUrl, text: String(text).slice(0, 500), focal35 });
-  broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
-  res.json({ ...r, pipeline: r.pipeline.map((s) => ({ model: s.model, step: s.step, failed: Boolean(s.error) })), lens: focal35 ? 'from photo' : 'typical phone' });
-}));
+  // Streaming (Accept: application/x-ndjson): one line per finished step, then the result, so the page's
+  // waiting steps follow real progress. Otherwise a single JSON reply.
+  const stream = /application\/x-ndjson/.test(req.get('accept') || '');
+  const line = (o) => res.write(`${JSON.stringify(o)}\n`);
+  if (stream) {
+    res.status(200).set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no' });
+    res.flushHeaders();
+    line({ type: 'start' });
+  }
+  try {
+    const r = await measureAnything({ dataUrl, text: String(text).slice(0, 500), focal35, onStep: stream ? (s) => line({ type: 'step', ...publicStep(s) }) : null });
+    broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
+    const out = { ...r, pipeline: r.pipeline.map(publicStep), lens: focal35 ? 'from photo' : 'typical phone' };
+    if (stream) { line({ type: 'result', ...out }); res.end(); } else res.json(out);
+  } catch (e) {
+    console.error(e);
+    const ask = measureErrorMessage(e);
+    if (stream) { line({ type: 'error', ok: false, retry: true, ask }); res.end(); } else res.status(502).json({ ok: false, retry: true, ask, error: ask });
+  }
+});
 
 // Sample photos for the demo chips (public/samples/*.jpg with a matching .txt message), if present.
 app.get('/api/measure/samples', (req, res) => {

@@ -7,7 +7,7 @@
 //      distance.js for ground distances and heights.
 //   4. The answer comes back as a number, what to buy and what to do, plus the outlines to draw.
 
-import { hasKey, sparkReadPhoto, samSegment } from './muse.js';
+import { hasKey, sparkReadPhoto, samSegment, sparkWrite } from './muse.js';
 import { measureFlat, FLAT_REFERENCES, maskBoundary } from './flat.js';
 import { best, measureSurface, garageDoorKind, REFERENCES as SURFACE_REFERENCES } from './measure.js';
 import { calibrate, gapBetween, heightOf, distanceTo, contactPoints, fitCheck, ftIn, UPRIGHT } from './distance.js';
@@ -224,13 +224,52 @@ function rectSideLine(obj) {
 
 // ---------- the main flow ----------
 
+// The steps the models and our math took, each stamped with how long it took (steps run one after
+// another, so the time since the previous step is this step's time). onStep reports progress live.
+function makePipeline(onStep) {
+  const steps = [];
+  let last = performance.now();
+  steps.add = (s) => {
+    const t = performance.now();
+    if (s.ms == null) s.ms = Math.round(t - last);
+    last = t;
+    steps.push(s);
+    try { onStep?.(s); } catch {}
+    return s;
+  };
+  return steps;
+}
+
+// SAM's result per concept: how many outlines it returned and its best confidence.
+function samResult(concepts, segs) {
+  return {
+    objects: concepts.map((concept, i) => {
+      const objs = segs[i]?.objects || [];
+      const cs = objs.map((o) => o.c).filter((c) => c != null);
+      return { concept, count: objs.length, conf: cs.length ? Math.round(Math.max(...cs) * 100) / 100 : null };
+    }),
+  };
+}
+
 /**
- * measureAnything({ dataUrl, text, focal35, deps })
- *   deps (for tests): { read(dataUrl, prompt, schema) -> json, segment(dataUrl, concept) -> { objects, frame } }
+ * measureAnything({ dataUrl, text, focal35, deps, onStep })
+ *   deps (for tests): { read(dataUrl, prompt, schema) -> json, segment(dataUrl, concept) -> { objects, frame },
+ *                       word?(system, facts) -> text }
+ *   onStep(step): called as each step finishes (for live progress on the page).
  */
-export async function measureAnything({ dataUrl, text = '', focal35 = null, deps = null }) {
-  const pipeline = [];
-  const live = deps || (hasKey() ? { read: (d, p, s) => sparkReadPhoto({ dataUrl: d, prompt: p, schema: s }), segment: (d, c) => samSegment({ dataUrl: d, concept: c }) } : null);
+export async function measureAnything({ dataUrl, text = '', focal35 = null, deps = null, onStep = null, wordTimeoutMs = WORD_TIMEOUT_MS }) {
+  const pipeline = makePipeline(onStep);
+  const live = deps || (hasKey() ? {
+    read: (d, p, s) => sparkReadPhoto({ dataUrl: d, prompt: p, schema: s }),
+    segment: (d, c) => samSegment({ dataUrl: d, concept: c }),
+    word: (system, facts) => sparkWrite({ system, facts, timeoutMs: WORD_TIMEOUT_MS }),
+  } : null);
+  const r = await measureCore({ dataUrl, text, focal35, live, pipeline });
+  if (r.ok && live?.word) await wordAnswer(r, live, pipeline, wordTimeoutMs);
+  return r;
+}
+
+async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
   const guess = guessFromText(text);
 
   // 1. Read the photo and the message.
@@ -238,9 +277,9 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   if (live) {
     try {
       read = await live.read(dataUrl, READ_PROMPT + (text ? `\nTheir message: "${text}"` : ''), READ_SCHEMA);
-      pipeline.push({ model: 'muse-spark-1.3', step: 'read the photo and the question', result: read });
+      pipeline.add({ model: 'muse-spark-1.3', step: 'read the photo and the question', result: read });
     } catch (e) {
-      pipeline.push({ model: 'muse-spark-1.3', step: 'read the photo and the question', error: String(e.message).slice(0, 200) });
+      pipeline.add({ model: 'muse-spark-1.3', step: 'read the photo and the question', error: String(e.message).slice(0, 200) });
     }
   }
   if (!read) read = { task: guess.task, target: DEFAULT_TARGET[guess.task], second_target: guess.task === 'gap_fit' ? 'house wall' : '', ruler: DEFAULT_RULER[guess.task], item_width_in: guess.item_width_in, tile_w_in: guess.tile_w_in, tile_l_in: guess.tile_l_in, shoe_for: guess.shoe_for, summary: '' };
@@ -269,13 +308,13 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   try {
     segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
   } catch (e) {
-    pipeline.push({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
-    return finishErr(read, pipeline, 'Couldn’t outline the photo just now; please send it again.');
+    pipeline.add({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
+    return finishErr(read, pipeline, 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.');
   }
   const [tSeg, rSeg, bSeg] = segs;
   const frame = tSeg.frame || rSeg.frame || bSeg?.frame;
   const target = best(tSeg.objects), ruler = best(rSeg.objects), other = bSeg ? best(bSeg.objects) : null;
-  pipeline.push({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: { [concepts[0]]: tSeg.objects.length, [concepts[1]]: rSeg.objects.length, ...(bSeg ? { [concepts[2]]: bSeg.objects.length } : {}) } });
+  pipeline.add({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: samResult(concepts, segs) });
 
   const outlines = [outlineOf(target, concepts[0], 'target'), outlineOf(ruler, rulerLabel(read.ruler), 'ruler'), other && outlineOf(other, concepts[2], 'target')].filter(Boolean);
   const overlay = { frame, outlines, lines: [] };
@@ -285,13 +324,13 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   if (['gap_fit', 'height', 'distance'].includes(read.task)) {
     if (!target) return finishErr(read, pipeline, `I couldn’t find the ${concepts[0]} in that photo. Try again with it in the middle of the shot.`, null, overlay);
     const cal = calibrate({ frame, focal35, ref: upright ? ruler : null, refKind: upright ? read.ruler : null, groundLines: [contactPoints(target, frame), ...(other ? [contactPoints(other, frame)] : [])] });
-    pipeline.push({ model: 'first-answer math', step: 'set up the camera from the photo', result: { how: cal.how, confidence: cal.confidence, cameraHeightFt: cal.primary && +cal.primary.height.toFixed(1), notes: cal.notes } });
+    pipeline.add({ model: 'first-answer math', step: 'set up the camera from the photo', result: { how: cal.how, confidence: cal.confidence, cameraHeightFt: cal.primary && +cal.primary.height.toFixed(1), notes: cal.notes } });
     if (!cal.ok) return finishErr(read, pipeline, cal.ask, null, overlay);
     base.measuredAgainst = upright && ruler && cal.how.includes('reference') ? rulerSpec(read.ruler) : 'a typical phone height (no door in the shot)';
     if (read.task === 'gap_fit') {
       if (!other) return finishErr(read, pipeline, `I found the ${concepts[0]} but not the ${concepts[2]}. Step back so both are in the shot.`, null, overlay);
       const g = gapBetween(target, other, cal, frame);
-      pipeline.push({ model: 'first-answer math', step: 'measure the gap', result: g });
+      pipeline.add({ model: 'first-answer math', step: 'measure the gap', result: g });
       if (!g.ok) return finishErr(read, pipeline, `I couldn’t see where both sides meet the ground. ${g.reason}.`, null, overlay);
       const itemFt = read.item_width_in ? read.item_width_in / 12 : null;
       const fit = itemFt ? fitCheck({ gap: g.tightest, itemFt }) : null;
@@ -312,7 +351,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
       });
     }
     const m = read.task === 'height' ? heightOf(target, cal) : distanceTo(target, cal);
-    pipeline.push({ model: 'first-answer math', step: read.task === 'height' ? 'measure the height' : 'measure the distance', result: m });
+    pipeline.add({ model: 'first-answer math', step: read.task === 'height' ? 'measure the height' : 'measure the distance', result: m });
     if (!m.ok) return finishErr(read, pipeline, m.reason, null, overlay);
     return finish({
       ...base,
@@ -329,7 +368,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   if (!ruler) return finishErr(read, pipeline, `I need something of known size next to it: lay a ${read.task === 'windshield_chip' ? 'quarter' : read.task === 'size' ? 'gift card or a quarter' : 'sheet of printer paper'} right beside it and send one more.`, null, overlay);
   const refKind = FLAT_REFERENCES[read.ruler] ? read.ruler : read.task === 'windshield_chip' ? 'quarter' : 'paper_letter';
   const m = measureFlat({ target, ref: ruler, refKind });
-  pipeline.push({ model: 'first-answer math', step: `measure against the ${FLAT_REFERENCES[refKind].label}`, result: m });
+  pipeline.add({ model: 'first-answer math', step: `measure against the ${FLAT_REFERENCES[refKind].label}`, result: m });
   if (!m.ok) return finishErr(read, pipeline, m.reason, null, overlay);
   const line = longestLine(target);
   base.measuredAgainst = rulerSpec(refKind);
@@ -371,7 +410,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
     const roomL = (m.rectLengthMm || m.lengthMm) / 25.4, roomW = (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4;
     const tw = read.tile_w_in || 12, tl = read.tile_l_in || read.tile_w_in || 12;
     const p = tilePlan({ roomW, roomL, tileW: tw, tileL: tl });
-    pipeline.push({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles: p.buyTiles, cuts: p.cuts?.length } });
+    pipeline.add({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles: p.buyTiles, cuts: p.cuts?.length } });
     if (line) overlay.lines.push({ ...line, label: ftIn(roomL / 12) });
     return finish({
       ...base,
@@ -421,18 +460,18 @@ async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
   try {
     segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
   } catch (e) {
-    pipeline.push({ model: 'sam-3.1', step: 'outline the face', error: String(e.message).slice(0, 200) });
-    return finishErr(read, pipeline, 'Couldn’t outline the photo just now; please send it again.', 'face');
+    pipeline.add({ model: 'sam-3.1', step: 'outline the face', error: String(e.message).slice(0, 200) });
+    return finishErr(read, pipeline, 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.', 'face');
   }
   const [cardS, eyeS, noseS, mouthS] = segs;
   const frame = cardS.frame || eyeS.frame || noseS.frame;
   const card = best(cardS.objects), nose = best(noseS.objects), mouth = best(mouthS.objects);
   // Every 'eye' SAM returns (maybe eyebrows or glasses too); face.js picks the real pair by shape and position.
   const eyes = eyeS.objects.filter((o) => o.c == null || o.c >= 0.3).sort((a, b) => (b.c ?? 1) - (a.c ?? 1)).slice(0, 8);
-  pipeline.push({ model: 'sam-3.1', step: 'outline: card, eyes, nose, mouth', result: { card: cardS.objects.length, eyes: eyeS.objects.length, nose: noseS.objects.length, mouth: mouthS.objects.length } });
+  pipeline.add({ model: 'sam-3.1', step: 'outline: card, eyes, nose, mouth', result: samResult(concepts, segs) });
   const overlay = { frame, outlines: [outlineOf(card, 'gift card', 'ruler')].filter(Boolean), lines: [] };
   const f = measureFace({ card, eyes, nose, mouth, frame, focal35 });
-  pipeline.push({ model: 'first-answer math', step: 'scale the face with the card', result: f.ok ? { confidence: f.confidence, phoneDistanceMm: f.distanceMm, headTurnDeg: f.yawDeg } : f.ask });
+  pipeline.add({ model: 'first-answer math', step: 'scale the face with the card', result: f.ok ? { confidence: f.confidence, phoneDistanceMm: f.distanceMm, headTurnDeg: f.yawDeg } : f.ask });
   if (!f.ok) return finishErr(read, pipeline, f.ask, 'face', overlay);
   for (const e of f.eyeObjects) overlay.outlines.push(outlineOf(e, 'eye', 'target'));
   for (const [o, l] of [[nose, 'nose'], [mouth, 'mouth']]) if (o) overlay.outlines.push(outlineOf(o, l, 'target'));
@@ -482,13 +521,13 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
   try {
     segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
   } catch (e) {
-    pipeline.push({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
-    return finishErr(read, pipeline, 'Couldn’t outline the photo just now; please send it again.');
+    pipeline.add({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
+    return finishErr(read, pipeline, 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.');
   }
   const [sSeg, dSeg] = segs;
   const frame = sSeg.frame || dSeg.frame;
   const surface = best(sSeg.objects), door = best(dSeg.objects);
-  pipeline.push({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: { [concepts[0]]: sSeg.objects.length, [concepts[1]]: dSeg.objects.length } });
+  pipeline.add({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: samResult(concepts, segs) });
   const refKind = front ? 'front_door' : door ? garageDoorKind(door.box) : 'double_garage_door';
   const R = SURFACE_REFERENCES[refKind];
   const overlay = { frame, outlines: [outlineOf(surface, concepts[0], 'target'), outlineOf(door, R.label, 'ruler')].filter(Boolean), lines: [] };
@@ -497,7 +536,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
   if (!frame) return finishErr(read, pipeline, 'Couldn’t read the photo size; please send it again.', null, overlay);
   const hfovDeg = focal35 && focal35 > 8 && focal35 < 300 ? (2 * Math.atan(18 / focal35) * 180) / Math.PI : 69;
   const m = measureSurface({ surface, ref: door, refKind, frame, hfovDeg });
-  pipeline.push({ model: 'first-answer math', step: `square feet against the ${R.label}`, result: { sqft: m.sqft, low: m.low, high: m.high, method: m.method, confidence: m.confidence, cameraHeightFt: m.cameraHeightFt } });
+  pipeline.add({ model: 'first-answer math', step: `square feet against the ${R.label}`, result: { sqft: m.sqft, low: m.low, high: m.high, method: m.method, confidence: m.confidence, cameraHeightFt: m.cameraHeightFt } });
   if (!m.ok) return finishErr(read, pipeline, `I couldn’t measure the ${concepts[0]} from that angle. Stand at the street end, straight on, with the whole ${concepts[0]} and the ${front ? 'door' : 'garage door'} in the shot.`, null, overlay);
   const t = String(text).toLowerCase();
   const kind = /asphalt|blacktop/.test(t) ? 'asphalt' : /concrete|slab|cement/.test(t) ? 'concrete' : 'unknown';
@@ -523,6 +562,100 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
   });
 }
 
+// ---------- Muse Spark words the answer from OUR numbers ----------
+//
+// The geometry has already produced every number. Spark only turns them into two or three plain
+// sentences. Every number in its text must be one of ours, or we keep the template.
+
+export const WORD_TIMEOUT_MS = 6000;
+
+export const WORD_PROMPT = `You write the text message First Answer sends back after measuring someone's photo.
+Use ONLY the facts in the JSON you are given. Write 2 or 3 short, plain sentences: first the answer, then the most useful next step.
+Numbers: copy every number exactly as it appears in the facts, with its unit. Never round, convert, add, average or calculate. Never write a number that is not in the facts, and never spell numbers out as words.
+No prices, no dates, no greetings, no emoji, no markdown, no lists. Do not mention AI, models or photos being analyzed.`;
+
+const NUM_RE = /\d+(?:,\d{3})*(?:\.\d+)?(?:\/\d+)?/g;
+const NUMBER_WORDS = /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|dozen|half|halves|quarter|third|double|twice|triple|single|once)\b/gi;
+const normNum = (n) => n.replace(/,(?=\d{3}\b)/g, '').replace(/\.0+$/, '');
+
+// The numbers (and number words) a text uses.
+export function numbersIn(text) {
+  return [...String(text).matchAll(NUM_RE)].map((m) => normNum(m[0]));
+}
+
+// Is Spark's wording safe to show? Every number (and number word) must come from our facts, the
+// headline's main number must be there, and it must be short plain text.
+export function checkWording(text, facts, headline = '') {
+  const t = String(text || '').trim();
+  if (!t) return { ok: false, reason: 'empty' };
+  if (t.length > 600) return { ok: false, reason: 'too long' };
+  if (/[*#`|]|^\s*[-•]/m.test(t)) return { ok: false, reason: 'formatting' };
+  const factText = typeof facts === 'string' ? facts : JSON.stringify(facts);
+  const allowed = new Set(numbersIn(factText));
+  const bad = numbersIn(t).filter((n) => !allowed.has(n));
+  if (bad.length) return { ok: false, reason: `numbers not ours: ${[...new Set(bad)].join(', ')}` };
+  const factWords = new Set([...factText.matchAll(NUMBER_WORDS)].map((m) => m[0].toLowerCase()));
+  const badWords = [...t.matchAll(NUMBER_WORDS)].map((m) => m[0].toLowerCase()).filter((w) => !factWords.has(w));
+  if (badWords.length) return { ok: false, reason: `number words not ours: ${[...new Set(badWords)].join(', ')}` };
+  if (/\$|€|£/.test(t) && !/\$|€|£/.test(factText)) return { ok: false, reason: 'money' };
+  const main = numbersIn(headline)[0];
+  if (main && !numbersIn(t).includes(main)) return { ok: false, reason: 'left out the main number' };
+  return { ok: true };
+}
+
+export function wordingFacts(r) {
+  return {
+    task: r.task,
+    headline: r.headline,
+    template_answer: r.answer,
+    numbers: (r.numbers || []).map((n) => `${n.label}: ${n.value}`),
+    what_to_buy: (r.shopping || []).slice(0, 3),
+    next_steps: (r.steps || []).slice(0, 3),
+    measured_against: r.measuredAgainst || null,
+    confidence: r.confidence,
+    tip: r.ask || null,
+  };
+}
+
+async function wordAnswer(r, live, pipeline, timeoutMs = WORD_TIMEOUT_MS) {
+  const facts = wordingFacts(r);
+  r.answerTemplate = r.answer;
+  r.wording = 'template';
+  const step = { model: 'muse-spark-1.3', step: 'word the answer from our numbers' };
+  let timer;
+  try {
+    const text = await Promise.race([
+      live.word(WORD_PROMPT, JSON.stringify(facts)),
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no reply in ${timeoutMs / 1000} s`)), timeoutMs); }),
+    ]);
+    const check = checkWording(text, facts, r.headline);
+    if (check.ok) {
+      r.answer = String(text).trim();
+      r.wording = 'spark';
+      pipeline.add({ ...step, result: { used: true, numbersChecked: numbersIn(text).length } });
+    } else {
+      pipeline.add({ ...step, result: { used: false, fellBack: check.reason } });
+    }
+  } catch (e) {
+    pipeline.add({ ...step, error: String(e.message).slice(0, 200), result: { used: false, fellBack: 'template' } });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// One short line per step for the "How Meta's models measured it" panel.
+export function stepDetail(s) {
+  if (s.error && !s.result) return `failed: ${s.error}`;
+  const r = s.result;
+  if (!r) return '';
+  if (Array.isArray(r.objects)) return r.objects.map((o) => `${o.concept}: ${o.count} outline${o.count === 1 ? '' : 's'}${o.conf != null ? ` (conf ${o.conf.toFixed(2)})` : ''}`).join(' · ');
+  if ('used' in r) return r.used ? `used; ${r.numbersChecked} number${r.numbersChecked === 1 ? '' : 's'} checked against ours` : `kept our template (${r.fellBack})`;
+  if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}`;
+  const pretty = (k) => k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/Mm2\b/, ' mm²').replace(/Mm\b/, ' mm').replace(/Ft\b/, ' ft').replace(/In2\b/, ' sq in').replace(/Pct\b/, ' %').toLowerCase();
+  const keep = Object.entries(r).filter(([k, v]) => !['ok', 'notes', 'reason', 'clipped'].includes(k) && v != null && ['number', 'string', 'boolean'].includes(typeof v));
+  return keep.slice(0, 5).map(([k, v]) => `${pretty(k)}: ${typeof v === 'number' ? (k.endsWith('Pct') ? `±${Math.round(v * 100)}` : Math.round(v * 100) / 100) : v}`).join(' · ');
+}
+
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const rulerLabel = (k) => FLAT_REFERENCES[k]?.label || UPRIGHT[k]?.label || k;
 
@@ -530,5 +663,6 @@ function finish(r) {
   return { ok: true, note: null, ...r };
 }
 function finishErr(read, pipeline, ask, task = null, overlay = null) {
-  return { ok: false, task: task || read?.task, read, ask, overlay, pipeline, headline: null, answer: null, numbers: [], shopping: [], steps: [], confidence: 'low' };
+  const retry = /tap Retry/.test(ask);
+  return { ok: false, retry, task: task || read?.task, read, ask, overlay, pipeline, headline: null, answer: null, numbers: [], shopping: [], steps: [], confidence: 'low' };
 }

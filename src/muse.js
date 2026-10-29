@@ -51,6 +51,21 @@ export async function sparkReadPhoto({ dataUrl, prompt, schema }) {
   return JSON.parse(r.choices[0].message.content);
 }
 
+// Muse Spark words a short reply from facts we hand it (no photo, no tools). Short timeout, no retries:
+// the caller falls back to its own template if this is slow or fails.
+export async function sparkWrite({ system, facts, timeoutMs = 6000 }) {
+  const r = await api().chat.completions.create({
+    model: SPARK,
+    reasoning_effort: 'low',
+    max_completion_tokens: 600,
+    messages: [
+      { role: 'developer', content: system },
+      { role: 'user', content: typeof facts === 'string' ? facts : JSON.stringify(facts) },
+    ],
+  }, { timeout: timeoutMs, maxRetries: 0 });
+  return String(r.choices[0].message.content || '').trim();
+}
+
 // SAM 3.1: segment every instance of a short noun phrase. Non-streaming; same text format as the stream.
 export async function samSegment({ dataUrl, concept }) {
   const res = await fetch(`${BASE_URL}/responses`, {
