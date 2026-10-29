@@ -8,6 +8,7 @@
 //   4. The answer comes back as a number, what to buy and what to do, plus the outlines to draw.
 
 import { hasKey, sparkReadPhoto, samSegment, sparkWrite } from './muse.js';
+import { DAILY_CAP_MESSAGE } from './guard.js';
 import { measureFlat, FLAT_REFERENCES, maskBoundary } from './flat.js';
 import { best, measureSurface, garageDoorKind, REFERENCES as SURFACE_REFERENCES } from './measure.js';
 import { calibrate, gapBetween, heightOf, distanceTo, contactPoints, fitCheck, ftIn, UPRIGHT } from './distance.js';
@@ -310,7 +311,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
     segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
   } catch (e) {
     pipeline.add({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
-    return finishErr(read, pipeline, 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.');
+    return finishErr(read, pipeline, samDown(e));
   }
   const [tSeg, rSeg, bSeg] = segs;
   const frame = tSeg.frame || rSeg.frame || bSeg?.frame;
@@ -483,7 +484,7 @@ async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
     segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
   } catch (e) {
     pipeline.add({ model: 'sam-3.1', step: 'outline the face', error: String(e.message).slice(0, 200) });
-    return finishErr(read, pipeline, 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.', 'face');
+    return finishErr(read, pipeline, samDown(e), 'face');
   }
   const [cardS, eyeS, noseS, mouthS] = segs;
   const frame = cardS.frame || eyeS.frame || noseS.frame;
@@ -544,7 +545,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
     segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
   } catch (e) {
     pipeline.add({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
-    return finishErr(read, pipeline, 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.');
+    return finishErr(read, pipeline, samDown(e));
   }
   const [sSeg, dSeg] = segs;
   const frame = sSeg.frame || dSeg.frame;
@@ -797,6 +798,9 @@ export function stepDetail(s) {
 
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const rulerLabel = (k) => FLAT_REFERENCES[k]?.label || UPRIGHT[k]?.label || k;
+
+// SAM didn't answer: say why in words a person can act on.
+const samDown = (e) => (e?.name === 'MetaBudgetError' ? DAILY_CAP_MESSAGE : 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.');
 
 function finish(r) {
   return { ok: true, note: null, business: null, ...r };

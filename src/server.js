@@ -16,7 +16,7 @@ import { quoteFromPhoto, photoReply } from './photo.js';
 import { measureAnything, stepDetail, friendlyError } from './anything.js';
 import { readExif } from './distance.js';
 import fs from 'node:fs';
-import { rateLimiter, tokenOk, redactSnapshot } from './guard.js';
+import { rateLimiter, tokenOk, redactSnapshot, metaBudgetGate, DAILY_CAP_MESSAGE } from './guard.js';
 import { hasKey, transcribeWav, openRealtimeTranscription, SPARK, BASE_URL, DIRECT_URL, RELAY_URL, relayHeaders } from './muse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -27,9 +27,11 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 32 
 
 // ---- owner live feed (server-sent events) ----
 // The owner board is public in the demo, so by default it shows redacted leads (no phone numbers,
-// addresses or voicemail text). With OWNER_TOKEN set, /owner.html?key=<token> shows everything.
+// addresses or voicemail text). With OWNER_TOKEN set, the board sends the key in the x-owner-key
+// header (opened as /owner.html#key=<token>; the fragment never reaches the server or its logs).
+// Keys in the query string are ignored: URLs end up in logs and browser history.
 // The event stream only says *that* something happened; the board then re-reads /api/owner/feed.
-const ownerKey = (req) => req.get('x-owner-key') || req.query.key;
+const ownerKey = (req) => req.get('x-owner-key');
 const isOwner = (req) => tokenOk(ownerKey(req), process.env.OWNER_TOKEN);
 const ownerView = (req) => (isOwner(req) ? engine.snapshot() : redactSnapshot(engine.snapshot()));
 const listeners = new Set();
@@ -54,6 +56,10 @@ app.get('/api/owner/feed', (req, res) => res.json({ ...ownerView(req), redacted:
 // Endpoints that spend Meta credits get a per-IP limit (in memory; one Render instance).
 export const measureLimit = rateLimiter({ max: Number(process.env.MEASURE_LIMIT) || 20, windowMs: 10 * 60 * 1000 });
 export const deskLimit = rateLimiter({ max: Number(process.env.DESK_LIMIT) || 60, windowMs: 10 * 60 * 1000, message: 'That’s a lot of messages in a few minutes. Give it a few minutes and try again.' });
+// /api/photo spends SAM and Muse Image per call: at least as strict as /api/measure.
+export const photoLimit = rateLimiter({ max: Math.min(Number(process.env.PHOTO_LIMIT) || 20, 20), windowMs: 10 * 60 * 1000 });
+// The global daily cap on Meta calls (META_DAILY_CAP): refuse up front when a request can't fit.
+const live = () => hasKey();
 
 function ensureLead(threadId, channel, phone, summary) {
   const t = getThread(threadId);
@@ -118,7 +124,7 @@ app.get('/api/diag', safe(async (req, res) => {
 }));
 
 // ---- text ----
-app.post('/api/message', deskLimit, safe(async (req, res) => {
+app.post('/api/message', deskLimit, metaBudgetGate(6, live), safe(async (req, res) => {
   const { threadId, text, phone } = req.body || {};
   if (!threadId || !text) return res.status(400).json({ error: 'threadId and text are required' });
   ensureLead(threadId, 'text', phone, text.slice(0, 140));
@@ -128,7 +134,7 @@ app.post('/api/message', deskLimit, safe(async (req, res) => {
 }));
 
 // ---- photo ----
-app.post('/api/photo', deskLimit, safe(async (req, res) => {
+app.post('/api/photo', photoLimit, metaBudgetGate(5, live), safe(async (req, res) => {
   const { threadId, dataUrl, text = '', phone } = req.body || {};
   if (!threadId || !/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ error: 'threadId and a PNG, JPEG or WebP photo are required' });
   const t = ensureLead(threadId, 'photo', phone, 'Sent a photo');
@@ -163,6 +169,7 @@ const publicStep = (s) => ({ model: s.model, step: s.step, failed: Boolean(s.err
 // Errors in words a person can act on.
 export function measureErrorMessage(e) {
   const m = String(e?.message || e || '');
+  if (e?.name === 'MetaBudgetError' || /daily limit/i.test(m)) return DAILY_CAP_MESSAGE;
   if (/SAM \d|sam-3/i.test(m)) return 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.';
   if (/timed? ?out|timeout|aborted|ETIMEDOUT/i.test(m)) return 'The Meta models took too long to answer; tap Retry.';
   if (/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|network|socket/i.test(m)) return 'Couldn’t reach the Meta models; tap Retry.';
@@ -172,7 +179,7 @@ export function measureErrorMessage(e) {
   return 'Something went wrong measuring that photo; tap Retry.';
 }
 
-app.post('/api/measure', measureLimit, async (req, res) => {
+app.post('/api/measure', measureLimit, metaBudgetGate(8, live), async (req, res) => {
   const { dataUrl, text = '', exifB64 = '' } = req.body || {};
   if (!/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ ok: false, ask: 'Send a PNG, JPEG or WebP photo.' });
   let focal35 = null;
@@ -194,7 +201,8 @@ app.post('/api/measure', measureLimit, async (req, res) => {
   } catch (e) {
     console.error(e);
     const ask = measureErrorMessage(e);
-    if (stream) { line({ type: 'error', ok: false, retry: true, ask }); res.end(); } else res.status(502).json({ ok: false, retry: true, ask, error: ask });
+    const retry = ask !== DAILY_CAP_MESSAGE;
+    if (stream) { line({ type: 'error', ok: false, retry, ask }); res.end(); } else res.status(502).json({ ok: false, retry, ask, error: ask });
   }
 });
 
@@ -222,7 +230,7 @@ app.get('/api/measure/samples', (req, res) => {
 // ---- voicemail ----
 const DEMO_VOICEMAIL = "Hi, this is Marcus over on Belmont Boulevard. I've got a two-car driveway that's covered in oil stains and I want it pressure washed before my daughter's party on the fifteenth. Call or text me back. Thanks.";
 
-app.post('/api/voicemail', deskLimit, upload.single('audio'), safe(async (req, res) => {
+app.post('/api/voicemail', deskLimit, metaBudgetGate(7, live), upload.single('audio'), safe(async (req, res) => {
   const { threadId, phone } = req.body || {};
   if (!threadId) return res.status(400).json({ error: 'threadId is required' });
   let transcript;

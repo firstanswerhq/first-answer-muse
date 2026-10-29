@@ -3,6 +3,7 @@
 // Muse Voice Transcribe for voicemail. The key is read from MODEL_API_KEY and never logged.
 
 import OpenAI from 'openai';
+import { metaCalls, MetaBudgetError } from './guard.js';
 
 export const DIRECT_URL = process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1';
 // Optional relay (relay/meta-relay.ts on Supabase) for hosts Meta's API turns away. When
@@ -19,6 +20,11 @@ export const TRANSCRIBE = 'muse-voice-transcribe-1.0';
 
 export const hasKey = () => Boolean(process.env.MODEL_API_KEY);
 
+// Every Meta call counts against the global daily cap (guard.js); past it, calls fail fast.
+function spend() {
+  if (!metaCalls.take(1)) throw new MetaBudgetError();
+}
+
 let client;
 function api() {
   if (!client) client = new OpenAI({ baseURL: BASE_URL, apiKey: process.env.MODEL_API_KEY, defaultHeaders: relayHeaders(), timeout: 60_000, maxRetries: 2 });
@@ -27,6 +33,7 @@ function api() {
 
 // One Chat Completions call with tools. Returns the assistant message.
 export async function sparkChat({ messages, tools, effort = 'low' }) {
+  spend();
   const r = await api().chat.completions.create({
     model: SPARK,
     messages,
@@ -39,6 +46,7 @@ export async function sparkChat({ messages, tools, effort = 'low' }) {
 
 // Muse Spark reads a photo and returns structured JSON about the job in it.
 export async function sparkReadPhoto({ dataUrl, prompt, schema }) {
+  spend();
   const r = await api().chat.completions.create({
     model: SPARK,
     reasoning_effort: 'low',
@@ -54,6 +62,7 @@ export async function sparkReadPhoto({ dataUrl, prompt, schema }) {
 // Muse Spark words a short reply from facts we hand it (no photo, no tools). Short timeout, no retries:
 // the caller falls back to its own template if this is slow or fails.
 export async function sparkWrite({ system, facts, timeoutMs = 6000 }) {
+  spend();
   const r = await api().chat.completions.create({
     model: SPARK,
     reasoning_effort: 'low',
@@ -68,6 +77,7 @@ export async function sparkWrite({ system, facts, timeoutMs = 6000 }) {
 
 // SAM 3.1: segment every instance of a short noun phrase. Non-streaming; same text format as the stream.
 export async function samSegment({ dataUrl, concept }) {
+  spend();
   const res = await fetch(`${BASE_URL}/responses`, {
     method: 'POST',
     headers: { ...relayHeaders(), Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
@@ -106,6 +116,7 @@ export function parseSam(text) {
 
 // Muse Voice Transcribe: one WAV (mono 16-bit PCM, 16 or 24 kHz, up to 10 minutes) in, text out.
 export async function transcribeWav(wavBuffer) {
+  spend();
   const form = new FormData();
   form.append('request', new Blob([JSON.stringify({ model: TRANSCRIBE, audioEncoding: 'WAV', mode: 'ENDPOINTING' })], { type: 'application/json' }));
   form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'voicemail.wav');
@@ -120,6 +131,7 @@ export async function transcribeWav(wavBuffer) {
 
 // Muse Image: edit the customer's own photo into an "after" preview. Returns a data URL or null.
 export async function museImageEdit({ dataUrl, prompt }) {
+  spend();
   const res = await fetch(`${BASE_URL}/images/edits`, {
     method: 'POST',
     headers: { ...relayHeaders(), Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
@@ -136,6 +148,7 @@ export async function museImageEdit({ dataUrl, prompt }) {
 // Live calls: open a realtime transcription session for one caller. The key stays on the server;
 // the browser streams 24 kHz 16-bit mono PCM to us and we relay it.
 export async function openRealtimeTranscription({ onEvent, onClose, mode = 'ENDPOINTING' }) {
+  spend();
   const { default: WebSocket } = await import('ws');
   const url = `${DIRECT_URL.replace(/^http/, 'ws')}/asr/realtime?sessionId=fa-${Date.now()}`;
   const ws = new WebSocket(url);

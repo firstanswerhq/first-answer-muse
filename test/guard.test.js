@@ -7,9 +7,9 @@ import http from 'node:http';
 delete process.env.MODEL_API_KEY;
 process.env.DIAG_TOKEN = 'diag-secret-for-tests';
 process.env.OWNER_TOKEN = 'owner-secret-for-tests';
-const { app, measureLimit } = await import('../src/server.js');
+const { app, measureLimit, photoLimit } = await import('../src/server.js');
 const engine = await import('../src/engine.js');
-const { clientIp, rateLimiter, tokenOk, redactSnapshot, scrub } = await import('../src/guard.js');
+const { clientIp, rateLimiter, tokenOk, redactSnapshot, redactLead, scrub, dailyCap, metaCalls } = await import('../src/guard.js');
 
 const server = http.createServer(app);
 await new Promise((r) => server.listen(0, r));
@@ -19,10 +19,12 @@ test.after(() => server.close());
 const tiny = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const measure = (ip) => fetch(`${base}/api/measure`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ dataUrl: tiny, text: 'how big' }) });
 
-test('client IP: cf-connecting-ip, then true-client-ip, then the first x-forwarded-for, then req.ip', () => {
+test('client IP: cf-connecting-ip, then true-client-ip, then the RIGHTMOST x-forwarded-for, then req.ip', () => {
   assert.equal(clientIp({ headers: { 'cf-connecting-ip': '1.1.1.1', 'true-client-ip': '2.2.2.2', 'x-forwarded-for': '3.3.3.3' }, ip: '4.4.4.4' }), '1.1.1.1');
   assert.equal(clientIp({ headers: { 'true-client-ip': '2.2.2.2', 'x-forwarded-for': '3.3.3.3' }, ip: '4.4.4.4' }), '2.2.2.2');
-  assert.equal(clientIp({ headers: { 'x-forwarded-for': '3.3.3.3, 10.0.0.1' }, ip: '4.4.4.4' }), '3.3.3.3');
+  // The caller can write anything on the left; Render appends the address it really saw.
+  assert.equal(clientIp({ headers: { 'x-forwarded-for': '6.6.6.6, 3.3.3.3' }, ip: '4.4.4.4' }), '3.3.3.3');
+  assert.equal(clientIp({ headers: { 'x-forwarded-for': '3.3.3.3 , ' }, ip: '4.4.4.4' }), '3.3.3.3');
   assert.equal(clientIp({ headers: {}, ip: '4.4.4.4' }), '4.4.4.4');
 });
 
@@ -75,7 +77,11 @@ test('owner feed: public view hides phone, address, name and voicemail; the owne
   assert.equal(pub.redacted, true);
   assert.doesNotMatch(text, /555-0142|412 Oak|Kim|Hi this is/);
   assert.equal(pub.leads[0].id, lead.id);
-  const own = await (await fetch(`${base}/api/owner/feed?key=owner-secret-for-tests`)).json();
+  // A key in the URL query is ignored (URLs land in logs); only the header works.
+  const viaQuery = await (await fetch(`${base}/api/owner/feed?key=owner-secret-for-tests`)).json();
+  assert.equal(viaQuery.redacted, true);
+  assert.doesNotMatch(JSON.stringify(viaQuery), /412 Oak/);
+  const own = await (await fetch(`${base}/api/owner/feed`, { headers: { 'x-owner-key': 'owner-secret-for-tests' } })).json();
   assert.equal(own.redacted, false);
   assert.equal(pub.bookings[0].quoteTotal, 189);
   assert.equal(own.bookings[0].address, '412 Oak St, Nashville');
@@ -115,4 +121,67 @@ test('sample photos are listed by URL (served as static files), not inlined as b
   const r = await (await fetch(`${base}/api/measure/samples`)).json();
   assert.ok(Array.isArray(r));
   assert.ok(r.every((x) => x.url && !x.dataUrl));
+});
+
+test('public leads are an allowlist: the hand-to-owner note and unknown fields never show', async () => {
+  engine.reset();
+  const lead = engine.addLead({ channel: 'text', phone: '615-555-0142', summary: 'driveway' });
+  engine.updateLead(lead.id, { status: 'needs owner', note: 'Angry, lives at 412 Oak St, call 615-555-0142', address: '412 Oak St', secretField: 'x', photo: 'data:image/png;base64,AAAA' });
+  const pub = await (await fetch(`${base}/api/owner/feed`)).json();
+  const l = pub.leads[0];
+  assert.equal(l.note, undefined);
+  assert.equal(l.address, undefined);
+  assert.equal(l.secretField, undefined);
+  assert.equal(l.photo, undefined);
+  assert.equal(l.status, 'needs owner');
+  assert.doesNotMatch(JSON.stringify(pub), /412 Oak|555-0142|base64/);
+  assert.deepEqual(Object.keys(redactLead({ id: 'x', anything: 1 })).includes('anything'), false);
+});
+
+test('/api/photo: 20 per 10 minutes per IP (it spends SAM and Muse Image)', async () => {
+  photoLimit.reset();
+  const post = () => fetch(`${base}/api/photo`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '7.7.7.7' }, body: JSON.stringify({}) });
+  for (let i = 0; i < 20; i++) assert.equal((await post()).status, 400, `request ${i + 1}`);
+  assert.equal((await post()).status, 429);
+});
+
+test('global daily cap on Meta calls: rotating IPs can’t get past it, and it resets each day', async () => {
+  let now = Date.parse('2026-11-01T10:00:00Z');
+  const cap = dailyCap({ max: 3, clock: () => now });
+  assert.equal(cap.take(), true);
+  assert.equal(cap.take(2), true);
+  assert.equal(cap.take(), false);
+  assert.equal(cap.remaining(), 0);
+  now = Date.parse('2026-11-02T00:00:01Z');
+  assert.equal(cap.remaining(), 3);
+  assert.equal(metaCalls.max, 1500);
+
+  // Live mode with the budget used up: /api/measure refuses before calling Meta, from any IP.
+  process.env.MODEL_API_KEY = 'test-not-a-real-key';
+  try {
+    metaCalls.take(metaCalls.remaining());
+    measureLimit.reset();
+    for (const ip of ['1.0.0.1', '1.0.0.2']) {
+      const r = await measure(ip);
+      assert.equal(r.status, 429);
+      const body = await r.json();
+      assert.equal(body.dailyCap, true);
+      assert.match(body.ask, /try again tomorrow/i);
+    }
+  } finally {
+    delete process.env.MODEL_API_KEY;
+    metaCalls.reset();
+  }
+});
+
+test('Meta calls past the cap fail fast without touching the network', async () => {
+  const muse = await import('../src/muse.js');
+  metaCalls.take(metaCalls.remaining());
+  try {
+    await assert.rejects(muse.samSegment({ dataUrl: tiny, concept: 'chip' }), { name: 'MetaBudgetError' });
+    const { measureErrorMessage } = await import('../src/server.js');
+    assert.match(measureErrorMessage(new (await import('../src/guard.js')).MetaBudgetError()), /tomorrow/);
+  } finally {
+    metaCalls.reset();
+  }
 });
