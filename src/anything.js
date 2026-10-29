@@ -7,7 +7,7 @@
 //      distance.js for ground distances and heights.
 //   4. The answer comes back as a number, what to buy and what to do, plus the outlines to draw.
 
-import { hasKey, sparkReadPhoto, samSegment, sparkWrite, sparkCheck } from './muse.js';
+import { hasKey, sparkReadPhoto, samSegment, samSegmentAt, sparkWrite, sparkCheck } from './muse.js';
 import { checkImagesAsync, COLOR_NAMES } from './overlay.js';
 import { DAILY_CAP_MESSAGE } from './guard.js';
 import { measureFlat, FLAT_REFERENCES, maskBoundary } from './flat.js';
@@ -246,6 +246,8 @@ function makePipeline(onStep) {
   let last = performance.now();
   steps.add = (s) => {
     const t = performance.now();
+    if (steps.attempt > 1 && !s.noAttempt) s.step = `${s.step} (attempt ${steps.attempt})`;
+    delete s.noAttempt;
     if (s.ms == null) s.ms = Math.round(t - last);
     last = t;
     steps.push(s);
@@ -269,6 +271,7 @@ function samResult(concepts, segs) {
 /**
  * measureAnything({ dataUrl, text, focal35, deps, onStep })
  *   deps (for tests): { read(dataUrl, prompt, schema) -> json, segment(dataUrl, concept) -> { objects, frame },
+ *                       segmentAt?(dataUrl, frame, point) -> { objects, frame },
  *                       word?(system, facts) -> text, check?(images, prompt, schema) -> json }
  *   onStep(step): called as each step finishes (for live progress on the page).
  */
@@ -277,28 +280,83 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   const live = deps || (hasKey() ? {
     read: (d, p, s) => sparkReadPhoto({ dataUrl: d, prompt: p, schema: s }),
     segment: (d, c) => samSegment({ dataUrl: d, concept: c }),
+    segmentAt: (d, frame, point) => samSegmentAt({ dataUrl: d, frame, point }),
     word: (system, facts) => sparkWrite({ system, facts, timeoutMs: WORD_TIMEOUT_MS }),
     check: (images, prompt, schema) => sparkCheck({ images, prompt, schema, timeoutMs: CHECK_TIMEOUT_MS }),
   } : null);
-  const r = await measureCore({ dataUrl, text, focal35, live, pipeline });
+  const sam = { cache: new Map(), override: null };
+  const r = await measureCore({ dataUrl, text, focal35, live, pipeline, sam });
   if (!r.ok) return r;
   // Muse Spark checks SAM's outlines while it words the answer (in parallel, to save time). If it
-  // disagrees with what SAM outlined, no number goes out: the customer gets a specific retake tip.
+  // disagrees with what SAM outlined, no number goes out as it is.
   const [chk] = await Promise.all([
     live?.check && pipeline.check ? checkOutlines({ dataUrl, live, check: pipeline.check, pipeline, timeoutMs: checkTimeoutMs }) : null,
     live?.word ? wordAnswer(r, live, pipeline, wordTimeoutMs) : null,
   ]);
   if (chk) r.checked = chk.agreed ? 'agreed' : chk.skipped ? 'skipped' : 'disagreed';
-  if (chk && chk.agreed === false) {
-    // The wording ran alongside the check; it is not sent, and the panel says so.
-    const w = pipeline.find((p) => /word the answer/.test(p.step));
-    if (w) { w.result = { used: false, fellBack: 'not sent: Spark’s check disagreed' }; delete w.error; }
-    return refuse(r, pipeline, chk.tip);
-  }
-  return r;
+  if (pipeline.check?.thumb) r.thumb = pipeline.check.thumb;
+  if (!chk || chk.agreed !== false) return r;
+  // The wording ran alongside the check; it is not sent, and the panel says so.
+  const w = pipeline.find((p) => /word the answer/.test(p.step));
+  if (w) { w.result = { used: false, fellBack: chk.fix ? 'not sent: Spark corrected SAM, so we re-measured' : 'not sent: Spark’s check disagreed' }; delete w.error; }
+  if (!chk.fix) return refuse(r, pipeline, chk.tip);
+  return correctOnce({ r, chk, dataUrl, text, focal35, live, pipeline, sam, wordTimeoutMs, checkTimeoutMs });
 }
 
-async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
+// Closing the loop: Spark disagreed with one of SAM's outlines and told us what to look for instead
+// (a better concept phrase, and a point on the right thing when it can). SAM outlines it once more,
+// our geometry re-measures, and Spark checks again. One correction round at most; if Spark still
+// disagrees, or its second check doesn't come back, no number goes out.
+async function correctOnce({ r, chk, dataUrl, text, focal35, live, pipeline, sam, wordTimeoutMs, checkTimeoutMs }) {
+  const { fix } = chk;
+  const item = pipeline.check.items.find((it) => it.role === fix.role);
+  const frame = pipeline.check.frame;
+  const t0 = performance.now();
+  let seg = null, how = null;
+  const tries = [];
+  if (fix.point && live.segmentAt && frame?.w) {
+    const point = { x: Math.min(frame.w - 1, Math.max(0, Math.floor(fix.point.x * frame.w))), y: Math.min(frame.h - 1, Math.max(0, Math.floor(fix.point.y * frame.h))) };
+    try { seg = await live.segmentAt(dataUrl, frame, point); how = `a point Spark marked (${point.x}, ${point.y})`; } catch (e) { tries.push(`point prompt failed: ${friendlyError(e)}`); }
+    if (seg && !seg.objects?.length) { tries.push('point prompt found nothing'); seg = null; }
+  }
+  if (!seg && fix.phrase) {
+    try { seg = await live.segment(dataUrl, fix.phrase); how = `“${fix.phrase}”`; } catch (e) { tries.push(`concept prompt failed: ${friendlyError(e)}`); }
+    if (seg && !seg.objects?.length) { tries.push(`nothing found for “${fix.phrase}”`); seg = null; }
+  }
+  pipeline.add({ model: 'sam-3.1', step: `outline the ${item?.name?.replace(/^(the|a) /, '') || 'object'} again with Spark’s fix`, ms: Math.round(performance.now() - t0), noAttempt: true,
+    result: seg ? { objects: [{ concept: how, count: seg.objects.length, conf: confOf(seg) }] } : { corrected: false, why: tries.join('; ') || 'no fix to try' } });
+  if (!seg) return refuse(r, pipeline, chk.tip);
+  if (!seg.frame) seg.frame = frame;
+  const firstTry = (r.overlay?.outlines || []).find((o) => o.role === (fix.role === 'other' ? 'target' : fix.role) && (fix.role !== 'other' || o.label === item?.name?.replace(/^the /, '')));
+  pipeline.attempt = 2;
+  sam.override = { idx: ROLE_INDEX[fix.role], seg };
+  const r2 = await measureCore({ dataUrl, text, focal35, live, pipeline, sam, presetRead: r.read });
+  if (!r2.ok) return { ...r2, corrected: { role: fix.role, how, ok: false } };
+  const [chk2] = await Promise.all([
+    live.check && pipeline.check ? checkOutlines({ dataUrl, live, check: pipeline.check, pipeline, timeoutMs: checkTimeoutMs, final: true }) : null,
+    live.word ? wordAnswer(r2, live, pipeline, wordTimeoutMs) : null,
+  ]);
+  if (pipeline.check?.thumb) r2.thumb = pipeline.check.thumb;
+  const firstSeen = chk.outlines?.find((o) => o.role === fix.role)?.seen || null;
+  r2.corrected = { role: fix.role, how, firstSeen };
+  if (firstTry && r2.overlay) r2.overlay.outlines = [{ ...firstTry, role: 'rejected', label: `SAM’s first try${firstSeen ? `: ${firstSeen}` : ''}` }, ...r2.overlay.outlines];
+  if (chk2?.agreed) { r2.checked = 'agreed'; return r2; }
+  const w2 = pipeline.filter((p) => /word the answer/.test(p.step)).at(-1);
+  if (w2) { w2.result = { used: false, fellBack: 'not sent: Spark’s second check didn’t agree' }; delete w2.error; }
+  const tip = chk2?.tip || `I didn’t measure this one: Muse Spark couldn’t confirm SAM’s second outline in time. Retake it with ${item?.name || 'the object'} whole, in focus and near the middle of the shot.`;
+  return { ...refuse(r2, pipeline, tip), corrected: r2.corrected };
+}
+const ROLE_INDEX = { target: 0, ruler: 1, other: 2 };
+const confOf = (seg) => { const cs = (seg.objects || []).map((o) => o.c).filter((c) => c != null); return cs.length ? Math.round(Math.max(...cs) * 100) / 100 : null; };
+
+async function measureCore({ dataUrl, text, focal35, live, pipeline, sam = { cache: new Map(), override: null }, presetRead = null }) {
+  // SAM's outlines for this photo, by concept: a second attempt reuses them, except the one Spark fixed.
+  const segsFor = (concepts) => Promise.all(concepts.map((c, i) => {
+    if (sam.override && sam.override.idx === i) return sam.override.seg;
+    if (!sam.cache.has(c)) sam.cache.set(c, live.segment(dataUrl, c));
+    return sam.cache.get(c);
+  }));
+  if (presetRead) return measureFrom({ dataUrl, text, focal35, live, pipeline, read: presetRead, segsFor, sam });
   const guess = guessFromText(text);
 
   // 1. Read the photo and the message.
@@ -330,7 +388,11 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
   if (read.task === 'face' && !faceEnabled()) return { ...finishErr(read, pipeline, FACE_OFF), unavailable: 'face' };
   if (!live) return finishErr(read, pipeline, 'Measuring needs the Meta models switched on for this server.');
   if (read.task === 'face') return faceFlow({ dataUrl, live, read, pipeline, focal35 });
-  if (read.task === 'surface_area') return surfaceFlow({ dataUrl, live, read, pipeline, focal35, text });
+  return measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsFor, sam });
+}
+
+async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsFor, sam }) {
+  if (read.task === 'surface_area') return surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsFor, sam });
 
   // 2. Outline the target(s) and the ruler at the same time.
   const upright = Boolean(UPRIGHT_CONCEPT[read.ruler]);
@@ -339,7 +401,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
   if (read.task === 'gap_fit') concepts.push(read.second_target || 'house wall');
   let segs;
   try {
-    segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
+    segs = await segsFor(concepts);
   } catch (e) {
     pipeline.add({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
     return finishErr(read, pipeline, samDown(e));
@@ -347,7 +409,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
   const [tSeg, rSeg, bSeg] = segs;
   const frame = tSeg.frame || rSeg.frame || bSeg?.frame;
   const target = best(tSeg.objects), ruler = best(rSeg.objects), other = bSeg ? best(bSeg.objects) : null;
-  pipeline.add({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: samResult(concepts, segs) });
+  if (!sam.override) pipeline.add({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: samResult(concepts, segs) });
 
   const outlines = [outlineOf(target, concepts[0], 'target'), outlineOf(ruler, rulerLabel(read.ruler), 'ruler'), other && outlineOf(other, concepts[2], 'target')].filter(Boolean);
   // What Spark will be asked to confirm, if we get as far as a number.
@@ -580,12 +642,12 @@ export function sealerNeeded(sqftHigh, surface = 'unknown') {
 
 // Driveway, patio, slab: SAM outlines the surface and the door; measure.js adds up real square feet
 // row by row using the door's height as the ruler and the surface's edges for the horizon.
-async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
+async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsFor, sam }) {
   const front = read.ruler === 'front_door';
   const concepts = [read.target || 'driveway', front ? 'front door' : 'garage door'];
   let segs;
   try {
-    segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
+    segs = await segsFor(concepts);
   } catch (e) {
     pipeline.add({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
     return finishErr(read, pipeline, samDown(e));
@@ -593,7 +655,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
   const [sSeg, dSeg] = segs;
   const frame = sSeg.frame || dSeg.frame;
   const surface = best(sSeg.objects), door = best(dSeg.objects);
-  pipeline.add({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: samResult(concepts, segs) });
+  if (!sam.override) pipeline.add({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: samResult(concepts, segs) });
   const refKind = front ? 'front_door' : door ? garageDoorKind(door.box) : 'double_garage_door';
   const R = SURFACE_REFERENCES[refKind];
   const overlay = { frame, outlines: [outlineOf(surface, concepts[0], 'target'), outlineOf(door, R.label, 'ruler')].filter(Boolean), lines: [] };
@@ -869,7 +931,7 @@ const COLOR_OF = COLOR_NAMES;
 export const CHECK_SCHEMA = {
   type: 'object',
   properties: {
-    outlines: { type: 'array', items: { type: 'object', properties: { color: { type: 'string' }, ok: { type: 'boolean' }, seen: { type: 'string' } }, required: ['color', 'ok', 'seen'], additionalProperties: false } },
+    outlines: { type: 'array', items: { type: 'object', properties: { color: { type: 'string' }, ok: { type: 'boolean' }, seen: { type: 'string' }, better_phrase: { type: 'string' }, point_x: { type: 'number' }, point_y: { type: 'number' } }, required: ['color', 'ok', 'seen', 'better_phrase', 'point_x', 'point_y'], additionalProperties: false } },
     problem: { type: 'string' },
     retake_tip: { type: 'string' },
   },
@@ -887,11 +949,26 @@ export function checkPrompt(items, withCrops, { drawn = true, frame = null } = {
 ${pics}
 ${lines}
 For each outline, in that order, return color, ok (true only if the outline really is that thing, mostly whole, not a different object, not a reflection or a picture of it), and seen (a short phrase naming what is actually inside it; for a coin, name the coin).
+If an outline is wrong and you can see the right thing in the photo, help SAM find it: better_phrase is a short noun phrase for it (2 to 5 words, like "small chip in windshield" or "concrete driveway", no commands, no numbers), and point_x, point_y mark one spot clearly on the right thing, as fractions of Image 1's width and height (0 to 1, from the top left). If the outline is right, or the right thing isn't in the photo, better_phrase is "" and point_x and point_y are -1.
 problem: one short sentence on what is wrong, or "" if every outline is right.
 retake_tip: if something is wrong, one short sentence telling the person how to retake the photo; else "". Never write numbers or measurements.`;
 }
 
-async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK_TIMEOUT_MS }) {
+// Spark's fix for a wrong outline, if it gave a usable one: a short phrase (letters only) and/or a point
+// inside the photo. A wrong coin is not "fixed" here: the coin's size changes, so the person is asked.
+export function fixFrom(outlines, got) {
+  const i = outlines.findIndex((o) => !o.ok);
+  if (i < 0) return null;
+  const bad = outlines[i], g = got[i] || {};
+  if (bad.role === 'ruler' && FLAT_REFERENCES[bad.ruler]?.shape === 'circle') return null;
+  const words = String(g.better_phrase || '').trim().toLowerCase();
+  const phrase = /^[\p{L} '’-]{2,40}$/u.test(words) && words.split(/\s+/).length <= 5 && !/\b(?:segment|find|outline|show|the photo)\b/.test(words) ? words : null;
+  const x = Number(g.point_x), y = Number(g.point_y);
+  const point = x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
+  return phrase || point ? { role: bad.role, phrase, point } : null;
+}
+
+async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK_TIMEOUT_MS, final = false }) {
   const items = check.items.filter((it) => it.obj);
   if (!items.length) return null;
   const t0 = performance.now();
@@ -911,9 +988,10 @@ async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK
     const outlines = items.map((it, i) => ({ color: COLOR_OF[it.role], ok: got[i]?.ok !== false, seen: String(got[i]?.seen || '').slice(0, 60) || 'something else', role: it.role, ruler: it.ruler, name: it.name }));
     const agreed = got.length >= items.length && outlines.every((o) => o.ok);
     const problem = String(ans?.problem || '').slice(0, 160);
-    pipeline.add({ ...step, ms: Math.round(performance.now() - t0), result: { check: agreed ? 'agrees' : 'disagrees', outlines: outlines.map(({ color, ok, seen }) => ({ color, ok, seen })), problem: agreed ? '' : problem, images: images.length } });
-    if (agreed) return { agreed: true };
-    return { agreed: false, tip: retakeTip(outlines, ans?.retake_tip) };
+    const fix = agreed || final ? null : fixFrom(outlines, got);
+    pipeline.add({ ...step, ms: Math.round(performance.now() - t0), result: { check: agreed ? 'agrees' : 'disagrees', outlines: outlines.map(({ color, ok, seen }) => ({ color, ok, seen })), problem: agreed ? '' : problem, images: images.length, fix: fix ? (fix.phrase || 'a point') : null } });
+    if (agreed) return { agreed: true, outlines };
+    return { agreed: false, tip: retakeTip(outlines, ans?.retake_tip), fix, outlines };
   } catch (e) {
     pipeline.add({ ...step, ms: Math.round(performance.now() - t0), error: String(e.message).slice(0, 200), result: { check: 'skipped', why: friendlyError(e.message) } });
     return { skipped: true };
@@ -962,9 +1040,12 @@ export function stepDetail(s) {
     if (r.check === 'skipped') return `check skipped (${r.why}); measured without it`;
     // The page draws its own colors, so the panel names each outline by its role, not the color Spark saw.
     const seen = (r.outlines || []).map((o) => `${ROLE_WORD[o.color] || o.color.toLowerCase()}: ${o.seen}`).join(', ');
-    return r.check === 'agrees' ? `agrees · ${seen}` : `disagrees · ${uncolor(r.problem).replace(/[\s.!?;,]+$/, '') || seen}; no number sent`;
+    const what = uncolor(r.problem).replace(/[\s.!?;,]+$/, '') || seen;
+    if (r.check === 'agrees') return `agrees · ${seen}`;
+    return r.fix ? `disagrees · ${what}; Spark told SAM what to look for${r.fix === 'a point' ? ' (a point)' : `: “${r.fix}”`}` : `disagrees · ${what}; no number sent`;
   }
   if (r.withheld) return 'measured, but not sent: Spark disagreed with the outlines';
+  if (r.corrected === false) return `nothing new from SAM (${r.why}); no number sent`;
   if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}${r.language === 'es' ? ' · language: Spanish' : ''}`;
   const pretty = (k) => k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/Mm2\b/, ' mm²').replace(/Mm\b/, ' mm').replace(/Ft\b/, ' ft').replace(/In2\b/, ' sq in').replace(/Pct\b/, ' %').toLowerCase();
   const keep = Object.entries(r).filter(([k, v]) => !['ok', 'notes', 'reason', 'clipped'].includes(k) && v != null && ['number', 'string', 'boolean'].includes(typeof v));

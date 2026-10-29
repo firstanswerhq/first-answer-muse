@@ -3,6 +3,7 @@
 // Muse Voice Transcribe for voicemail. The key is read from MODEL_API_KEY and never logged.
 
 import OpenAI from 'openai';
+import { buildObjectPrompt } from '@meta-sam/parser';
 import { metaCalls, MetaBudgetError } from './guard.js';
 
 export const DIRECT_URL = process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1';
@@ -124,6 +125,26 @@ export async function samSegment({ dataUrl, concept }) {
   const body = await res.json();
   const text = body.output_text ?? (body.output || []).flatMap((o) => o.content || []).map((c) => c.text || '').join('');
   return parseSam(text);
+}
+
+// SAM 3.1 with a point instead of a noun phrase: Muse Spark marked a spot on the thing SAM missed.
+// The prompt text comes from @meta-sam/parser's buildObjectPrompt (one positive point, object id 0, on
+// the media's w × h as SAM reported it); a request never mixes a point with a noun phrase.
+export async function samSegmentAt({ dataUrl, frame, point }) {
+  const text = buildObjectPrompt({ size: { width: frame.w, height: frame.h }, objects: [{ id: 0, prompts: [{ points: [{ x: point.x, y: point.y }] }] }] });
+  spend();
+  const res = await fetch(`${BASE_URL}/responses`, {
+    method: 'POST',
+    headers: { ...relayHeaders(), Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: SAM,
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text }, { type: 'input_image', image_url: dataUrl }] }],
+      metadata: { include_confidence: 'true' },
+    }),
+  });
+  if (!res.ok) throw new Error(`SAM ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const body = await res.json();
+  return parseSam(body.output_text ?? (body.output || []).flatMap((o) => o.content || []).map((c) => c.text || '').join(''));
 }
 
 // Parse SAM's special-token text into objects: box, confidence, and the mask (still encoded).

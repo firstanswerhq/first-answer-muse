@@ -157,13 +157,14 @@ function annotatedShot(dataUrl, overlay) {
     const b = o.box;
     if (!b) return;
     const isRuler = o.role === 'ruler';
+    const cls = o.role === 'rejected' ? 'o-rejected' : isRuler ? 'o-ruler' : 'o-target';
     if (o.path && o.w && o.h) {
       // Same as drawBoxes() in app.js: the path is in mask pixels (w x h); place it in the box.
       const p = document.createElementNS(SVGNS, 'path');
       p.setAttribute('d', o.path);
       p.setAttribute('transform', `translate(${b.x1} ${b.y1}) scale(${(b.x2 - b.x1 + 1) / o.w} ${(b.y2 - b.y1 + 1) / o.h})`);
       p.setAttribute('vector-effect', 'non-scaling-stroke');
-      p.setAttribute('class', isRuler ? 'o-ruler' : 'o-target');
+      p.setAttribute('class', cls);
       p.setAttribute('pathLength', '1');
       p.style.animationDelay = `${500 + i * 160}ms`;
       svg.appendChild(p);
@@ -171,10 +172,11 @@ function annotatedShot(dataUrl, overlay) {
       const r = document.createElementNS(SVGNS, 'rect');
       Object.entries({ x: b.x1, y: b.y1, width: b.x2 - b.x1, height: b.y2 - b.y1, rx: 4 }).forEach(([k, v]) => r.setAttribute(k, v));
       r.setAttribute('vector-effect', 'non-scaling-stroke');
-      r.setAttribute('class', isRuler ? 'o-ruler' : 'o-target');
+      r.setAttribute('class', cls);
       r.setAttribute('pathLength', '1');
       svg.appendChild(r);
     }
+    if (o.role === 'rejected') return; // SAM's first try: drawn dashed, named in the key, no pin
     const label = o.label || (isRuler ? 'reference' : 'target');
     const conf = o.conf != null ? ` · ${Number(o.conf).toFixed(2)}` : '';
     // Rulers are small and often sit inside a target: tag them under the box.
@@ -229,11 +231,18 @@ function shotKey(r) {
   if (!outlines.length) return null;
   const el = document.createElement('div');
   el.className = 'shot-key';
-  const item = (o) => `<span class="k ${o.role === 'ruler' ? 'ruler' : 'target'}"><i></i>${esc(o.role === 'ruler' ? `ruler: ${o.label}` : o.label)}${o.conf != null ? ` <em>${Number(o.conf).toFixed(2)}</em>` : ''}</span>`;
-  const check = { agreed: ['ok', 'Muse Spark checked these outlines and agrees'], disagreed: ['bad', 'Muse Spark checked these outlines and disagreed, so nothing was measured'], skipped: ['skip', 'Muse Spark’s check didn’t come back in time, so this was measured without it'] }[r.checked];
+  const T = L(r);
+  const item = (o) => `<span class="k ${o.role === 'ruler' ? 'ruler' : o.role === 'rejected' ? 'rejected' : 'target'}"><i></i>${esc(o.role === 'ruler' ? `${T.ruler}: ${o.label}` : o.label)}${o.conf != null && o.role !== 'rejected' ? ` <em>${Number(o.conf).toFixed(2)}</em>` : ''}</span>`;
+  const check = r.corrected && r.checked === 'agreed' ? ['ok', T.corrected] : { agreed: ['ok', T.agreed], disagreed: ['bad', r.corrected ? T.correctedBad : T.disagreed], skipped: ['skip', T.skipped] }[r.checked];
   el.innerHTML = `<div class="k-row"><span class="mtag sam">SAM 3.1 masks</span>${outlines.map(item).join('')}</div>${check ? `<div class="k-check ${check[0]}"><span class="mtag spark">Muse Spark</span>${esc(check[1])}</div>` : ''}`;
   return el;
 }
+
+// ---------- words on the card (English; Spanish for Spanish questions) ----------
+const UI = {
+  en: { ruler: 'ruler', agreed: 'Muse Spark checked these outlines and agrees', disagreed: 'Muse Spark checked these outlines and disagreed, so nothing was measured', skipped: 'Muse Spark’s check didn’t come back in time, so this was measured without it', corrected: 'Muse Spark disagreed with SAM’s first outline, told SAM what to look for, and agrees with the new one (re-measured)', correctedBad: 'Muse Spark corrected SAM once and still disagreed, so nothing was measured' },
+};
+const L = (r) => UI[r?.language === 'es' && UI.es ? 'es' : 'en'];
 
 // ---------- reply ----------
 function list(items, ordered) {
@@ -295,7 +304,7 @@ function renderReply(r, dataUrl) {
     sec.className = 'r-pipe';
     const secs = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
     const total = pipe.reduce((t, p) => t + (p.ms || 0), 0);
-    sec.innerHTML = `<h4>How Meta's models measured it${total ? ` <small>${secs(total)}</small>` : ''}</h4><ol>${pipe.map((p) => {
+    sec.innerHTML = `<h4>How Meta's models measured it${total ? ` <small>${secs(total)}</small>` : ''}</h4>${r.corrected && r.ok !== false ? `<p class="r-fixed"><span class="mtag spark">Muse Spark</span> corrected SAM’s outline → <span class="mtag sam">SAM 3.1</span> outlined it again → re-measured</p>` : ''}<ol>${pipe.map((p) => {
       const [k, name] = modelInfo(p.model);
       return `<li class="${p.failed ? 'failed' : ''}"><span class="mtag ${k}">${esc(name)}</span><span class="what">${esc(p.step || '')}${p.detail ? ` <em>· ${esc(p.detail)}</em>` : ''}</span><span class="ms">${esc(secs(p.ms))}</span></li>`;
     }).join('')}</ol>`;

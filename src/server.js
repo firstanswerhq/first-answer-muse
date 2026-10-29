@@ -250,7 +250,9 @@ app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
   });
 }));
 
-app.post('/api/measure', measureLimit, metaBudgetGate(8, live), async (req, res) => {
+// Up to 12 Meta calls: read, 3 SAM outlines, check and wording, then one correction round (SAM again,
+// possibly twice, check and wording again). Every HTTP attempt is counted as it happens.
+app.post('/api/measure', measureLimit, metaBudgetGate(12, live), async (req, res) => {
   const { dataUrl, text = '', exifB64 = '' } = req.body || {};
   if (!/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ ok: false, ask: 'Send a PNG, JPEG or WebP photo.' });
   let focal35 = null;

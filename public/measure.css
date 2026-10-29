@@ -141,6 +141,7 @@ body {
 .shot .o-target, .shot .o-ruler { stroke-width: 2.5; stroke-dasharray: 1; stroke-dashoffset: 1; fill-opacity: 0; animation: trace 0.9s 0.5s cubic-bezier(.6, 0, .2, 1) forwards; }
 .shot .o-target { fill: var(--laser); stroke: var(--laser); filter: drop-shadow(0 0 4px var(--laser)); }
 .shot .o-ruler { fill: var(--tape); stroke: var(--tape); filter: drop-shadow(0 0 4px var(--tape)); }
+.shot .o-rejected { fill: none; stroke: #ff8a8a; stroke-width: 2; stroke-dasharray: 6 5; opacity: .8; }
 @keyframes trace { 70% { stroke-dashoffset: 0; fill-opacity: 0; } 100% { stroke-dashoffset: 0; fill-opacity: 0.16; } }
 .shot .m-line { stroke: #fff; stroke-width: 2.5; stroke-linecap: round; filter: drop-shadow(0 0 3px var(--laser)); stroke-dasharray: 1; stroke-dashoffset: 1; animation: extend .7s 1.3s ease-out forwards; }
 .shot .m-ticks { stroke: #fff; stroke-width: 1.2; opacity: 0; animation: show .4s 1.8s forwards; filter: drop-shadow(0 0 2px rgba(0, 0, 0, .9)); }
@@ -161,6 +162,7 @@ body {
 .shot-key .k i { width: 11px; height: 11px; border-radius: 3px; flex: none; }
 .shot-key .k.target i { background: rgba(79, 240, 255, .35); border: 2px solid var(--laser); }
 .shot-key .k.ruler i { background: rgba(255, 197, 61, .35); border: 2px solid var(--tape); }
+.shot-key .k.rejected i { background: transparent; border: 2px dashed #ff8a8a; }
 .shot-key .k em { font-style: normal; color: var(--mute); font-variant-numeric: tabular-nums; }
 .shot-key .k-check.ok { color: var(--good); }
 .shot-key .k-check.bad { color: #ffb4b4; }
@@ -223,6 +225,7 @@ body {
 .r-pipe { border-top: 1px solid var(--edge); padding: 12px 16px 14px; background: rgba(5, 12, 26, 0.5); }
 .r-pipe h4 { margin: 0 0 9px; font: 700 13px/1.2 var(--display); color: #cfe0ff; display: flex; justify-content: space-between; gap: 8px; }
 .r-pipe h4 small { font: 600 11.5px/1.2 var(--body); color: var(--mute); }
+.r-pipe .r-fixed { margin: 0 0 9px; font-size: 12.5px; color: #cfe0ff; display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: center; }
 .r-pipe ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
 .r-pipe li { display: flex; gap: 9px; align-items: baseline; font-size: 12.5px; line-height: 1.4; color: #c4d3ea; }
 .r-pipe li em { color: var(--mute); font-style: normal; }
