@@ -610,25 +610,120 @@ export function numbersIn(text) {
   return [...String(text).matchAll(NUM_RE)].map((m) => normNum(m[0]));
 }
 
-// Is Spark's wording safe to show? Every number (and number word) must come from our facts, the
-// headline's main number must be there, and it must be short plain text.
+// Units a number can carry, read in English or Spanish. Order matters: longer forms first
+// ("sq ft" before "ft", "five-gallon pails" before "gallons").
+const APOS = '[’\']';
+const SUFFIX_UNITS = [
+  ['sqft', new RegExp(`^\\s*(?:sq\\.?\\s*f(?:ee)?t\\b|square\\s+f(?:ee|oo)t\\b|pies?\\s+cuadrados?\\b)`, 'i')],
+  ['sqin', /^\s*(?:sq\.?\s*in\b|square\s+inch(?:es)?\b|pulgadas?\s+cuadradas?\b)/i],
+  ['pail', /^\s*(?:(?:five|5|cinco)[- ]gallon\s+)?(?:pails?|buckets?|cubetas?(?:\s+de\s+(?:cinco|5)\s+galones)?)\b/i],
+  ['gallon', /^\s*(?:gal(?:lon)?s?\b|gal[oó]n(?:es)?\b)/i],
+  ['tiles', /^\s*(?:(?:full\s+)?tiles?\b|baldosas?\b|azulejos?\b|losetas?\b)/i],
+  ['mm', /^\s*(?:mm\b|millimet(?:er|re)s?\b|mil[ií]metros?\b)/i],
+  ['cm', /^\s*(?:cm\b|centimet(?:er|re)s?\b|cent[ií]metros?\b)/i],
+  ['in', /^\s*(?:in\b(?!\s+(?:the|a|an|your|tile|it|one|two)\b)|inch(?:es)?\b|"|″|pulgadas?\b)/i],
+  ['ft', /^\s*(?:ft\b|feet\b|foot\b|'|′|pies?\b)/i],
+  ['pct', /^\s*(?:%|percent\b|por\s*ciento\b)/i],
+  ['men', new RegExp(`^\\s*(?:men${APOS}?s\\b|(?:de\\s+)?(?:hombre|caballero)s?\\b)`, 'i')],
+  ['women', new RegExp(`^\\s*(?:women${APOS}?s\\b|(?:de\\s+)?(?:mujer|dama|señora)s?\\b)`, 'i')],
+];
+// Units written before the number: "US men’s: 10.5", "EU 44", "talla 10.5 de hombre" is a suffix.
+const PREFIX_UNITS = [
+  ['women', new RegExp(`(?:women${APOS}?s|mujer(?:es)?|dama(?:s)?)\\s*:?\\s*(?:size\\s+|talla\\s+)?$`, 'i')],
+  ['men', new RegExp(`(?:men${APOS}?s|hombres?|caballeros?)\\s*:?\\s*(?:size\\s+|talla\\s+)?$`, 'i')],
+  ['eu', /\b(?:EU|UE)\s*:?\s*(?:size\s+|talla\s+)?$/i],
+  ['us', /\b(?:US|EE\.?\s*UU\.?)\s*:?\s*(?:size\s+|talla\s+)?$/i],
+];
+// "between 370 and 470 sq ft", "370 – 470 sq ft", "de 370 a 470 pies": the first number takes the second's unit.
+// "18 × 24 ft" and "18 by 24 ft" too.
+const RANGE_JOIN = /^\s*(?:–|—|-|to|and|or|a|y|o|hasta|×|x|by|por)\s*(?=\d)/i;
+
+// The facts as plain lines (JSON quotes would read as inch marks).
+const factLines = (facts) => {
+  if (typeof facts === 'string') return facts;
+  const out = [];
+  const walk = (v) => { if (v == null) return; if (typeof v === 'object') Object.values(v).forEach(walk); else out.push(String(v)); };
+  walk(facts);
+  return out.join('\n');
+};
+
+// Every number in a text with the unit it carries (or '' when it has none): [{ n, unit }].
+export function numberUnits(text) {
+  const s = String(text);
+  const found = [...s.matchAll(NUM_RE)].map((m) => ({ n: normNum(m[0]), at: m.index, end: m.index + m[0].length }));
+  const unitAfter = (i) => {
+    const rest = s.slice(i, i + 40);
+    for (const [u, re] of SUFFIX_UNITS) if (re.test(rest)) return u;
+    return '';
+  };
+  const unitBefore = (i) => {
+    const head = s.slice(Math.max(0, i - 24), i);
+    for (const [u, re] of PREFIX_UNITS) if (re.test(head)) return u;
+    return '';
+  };
+  const out = found.map((f) => ({ n: f.n, unit: unitAfter(f.end) || unitBefore(f.at), f }));
+  for (let k = out.length - 2; k >= 0; k--) {
+    if (out[k].unit) continue;
+    const gap = s.slice(out[k].f.end, out[k + 1].f.at + 1);
+    if (RANGE_JOIN.test(gap)) out[k].unit = out[k + 1].unit;
+  }
+  return out.map(({ n, unit }) => ({ n, unit }));
+}
+
+// The verdict a headline gives, and the words that would say the opposite (English and Spanish).
+const VERDICTS = [
+  { when: /^repair it/i, name: 'repair',
+    need: /\brepair|\brepar(?:a|ar|arse|ación|able)/i,
+    against: /\breplace (?:it|the|your)\b|\bneeds? (?:a )?(?:new|replacing|replacement)\b|bigger than a quarter|larger than a quarter|longer than 6 in|can(?:no|’|')t be repaired|not repairable|\bcambi(?:ar|e) (?:el|todo el) parabrisas|\breemplaz(?:ar|e|o) (?:el|todo el) parabrisas|más grande que una moneda|no se puede reparar/i },
+  { when: /^replace it/i, name: 'replace',
+    need: /\breplac|\breemplaz|\bcambi(?:ar|o|e)\b/i,
+    against: /\bcan (?:usually )?be repaired|\brepair it\b|smaller than a quarter|under 6 in|se puede reparar|más pequeñ[oa] que una moneda|menor que una moneda/i },
+  { when: /^won[’']t fit/i, name: 'won’t fit',
+    need: /won[’']?t fit|will not fit|does(?:n[’']?t| not) fit|no (?:va a )?cab(?:e|rá)/i,
+    against: /\b(?:it|shed|unit|that|this) (?:will |should )?fits?\b|\bwill fit\b|plenty of room|\bsí cabe\b|(?<!no )\bcabe bien\b/i },
+  { when: /^fits, but tight/i, name: 'tight',
+    need: /\btight|\bjust (?:barely )?fits|justo|apretad/i,
+    against: /won[’']?t fit|will not fit|does(?:n[’']?t| not) fit|plenty of room|no cabe|no va a caber|de sobra/i },
+  { when: /^fits\b/i, name: 'fits',
+    need: /\bfits?\b|\bcabe\b|\bcabrá\b/i,
+    against: /won[’']?t fit|will not fit|does(?:n[’']?t| not) fit|\btoo (?:narrow|small|tight)\b|\btight\b|no cabe|no va a caber|no cabrá|apretad/i },
+];
+export const verdictOf = (headline) => VERDICTS.find((v) => v.when.test(String(headline || ''))) || null;
+
+// Is Spark's wording safe to show? Every number (and number word) must come from our facts, with the
+// same unit it has there ("2 gallons" is wrong when 2 is the pail count); the headline's main number
+// must be there with its unit; a verdict headline (repair / replace, fits / tight / won't fit) must be
+// said and never contradicted; and it must be short plain text.
 export function checkWording(text, facts, headline = '') {
   const t = String(text || '').trim();
   if (!t) return { ok: false, reason: 'empty' };
-  if (t.length > 600) return { ok: false, reason: 'too long' };
+  if (t.length > 700) return { ok: false, reason: 'too long' };
   if (/[*#`|]|^\s*[-•]/m.test(t)) return { ok: false, reason: 'formatting' };
-  const factText = typeof facts === 'string' ? facts : JSON.stringify(facts);
+  const factText = factLines(facts);
   const allowed = new Set(numbersIn(factText));
   const bad = numbersIn(t).filter((n) => !allowed.has(n));
   if (bad.length) return { ok: false, reason: `numbers not ours: ${[...new Set(bad)].join(', ')}` };
+  const factPairs = new Set(numberUnits(factText).map((p) => `${p.n} ${p.unit}`));
+  const wrongUnit = numberUnits(t).filter((p) => p.unit && !factPairs.has(`${p.n} ${p.unit}`));
+  if (wrongUnit.length) return { ok: false, reason: `unit not ours: ${[...new Set(wrongUnit.map((p) => `${p.n} ${UNIT_NAME[p.unit]}`))].join(', ')}` };
   const factWords = new Set([...factText.matchAll(NUMBER_WORDS)].map((m) => m[0].toLowerCase()));
   const badWords = [...t.matchAll(NUMBER_WORDS)].map((m) => m[0].toLowerCase()).filter((w) => !factWords.has(w));
   if (badWords.length) return { ok: false, reason: `number words not ours: ${[...new Set(badWords)].join(', ')}` };
   if (/\$|€|£/.test(t) && !/\$|€|£/.test(factText)) return { ok: false, reason: 'money' };
-  const main = numbersIn(headline)[0];
-  if (main && !numbersIn(t).includes(main)) return { ok: false, reason: 'left out the main number' };
+  const main = numberUnits(headline)[0];
+  if (main) {
+    const said = numberUnits(t);
+    if (!said.some((p) => p.n === main.n)) return { ok: false, reason: 'left out the main number' };
+    if (main.unit && !said.some((p) => p.n === main.n && p.unit === main.unit)) return { ok: false, reason: `main number without its unit (${UNIT_NAME[main.unit]})` };
+  }
+  const v = verdictOf(headline);
+  if (v) {
+    if (!v.need.test(t)) return { ok: false, reason: `left out the verdict (${v.name})` };
+    if (v.against.test(t)) return { ok: false, reason: `says the opposite of “${v.name}”` };
+  }
   return { ok: true };
 }
+const UNIT_NAME = { sqft: 'sq ft', sqin: 'sq in', pail: 'pails', gallon: 'gallons', tiles: 'tiles', mm: 'mm', cm: 'cm', in: 'in', ft: 'ft', pct: '%', men: 'men’s', women: 'women’s', eu: 'EU', us: 'US' };
 
 export function wordingFacts(r) {
   return {

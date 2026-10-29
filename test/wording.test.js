@@ -115,3 +115,54 @@ test('measure errors become specific guidance with Retry', async () => {
   assert.match(measureErrorMessage(new Error('Request timed out.')), /too long.*Retry/);
   assert.doesNotMatch(measureErrorMessage(new Error('weird')), /Something went wrong on our side/);
 });
+
+// Review round 2: numbers must keep their units, and a verdict can't be flipped.
+const DRIVE = {
+  task: 'surface_area', headline: 'About 420 sq ft',
+  template_answer: 'Your driveway is about 420 sq ft (about 18 ft wide by 24 ft long), between 370 and 470 sq ft, measured against the double garage door. That’s 3 gallons of concrete sealer or 2 five-gallon pails of asphalt sealer per coat.',
+  numbers: ['Area: 420 sq ft', 'Range: 370 – 470 sq ft', 'Size: 18 × 24 ft', 'Concrete sealer: 3 gallons per coat', 'Asphalt sealer: 2 five-gallon pails per coat'],
+  next_steps: ['Clean it first: pressure wash and let it dry 24 hours.'],
+};
+const CHIP = { headline: 'Repair it', template_answer: 'That chip is 0.5 in — smaller than a quarter, so it can usually be repaired instead of replacing the glass.', numbers: ['Chip size: 0.5 in', 'Range: 0.48 in – 0.52 in (±4%)', 'Repair limit: 1 in (a quarter)'] };
+const SHOE = { headline: 'Size 10.5 men’s / 12 women’s', template_answer: 'Your foot is 10.5 in long (26.7 cm). That’s a US 10.5 men’s / 12 women’s, about EU 44.', numbers: ['Foot length: 10.5 in · 26.7 cm', 'US men’s: 10.5', 'US women’s: 12', 'EU: 44'] };
+
+test('a number with the wrong unit fails: 2 gallons when 2 is the pail count', () => {
+  assert.match(checkWording('Your driveway is about 420 sq ft. Buy 2 gallons of concrete sealer per coat.', DRIVE, DRIVE.headline).reason, /unit not ours: 2 gallons/);
+  assert.equal(checkWording('Your driveway is about 420 sq ft, between 370 and 470 sq ft. Buy 3 gallons of concrete sealer or 2 five-gallon pails of asphalt sealer per coat.', DRIVE, DRIVE.headline).ok, true);
+  assert.equal(checkWording(DRIVE.template_answer, DRIVE, DRIVE.headline).ok, true);
+  assert.match(checkWording('Your driveway is about 420 ft, so buy 3 gallons.', DRIVE, DRIVE.headline).reason, /unit not ours: 420 ft/);
+  assert.match(checkWording('It is 18 × 24 sq ft, 420 sq ft in all.', DRIVE, DRIVE.headline).reason, /unit not ours/);
+});
+
+test('a flipped verdict fails: “Repair it” reworded to replace', () => {
+  assert.equal(checkWording(CHIP.template_answer, CHIP, CHIP.headline).ok, true);
+  assert.equal(checkWording('Good news: that 0.5 in chip is smaller than a quarter, so it can usually be repaired. Put clear tape over it.', CHIP, CHIP.headline).ok, true);
+  assert.equal(checkWording('That 0.5 in chip is bigger than a quarter, so replace the windshield.', CHIP, CHIP.headline).ok, false);
+  assert.match(checkWording('That 0.5 in chip is bigger than a quarter, so skip the repair and replace the windshield.', CHIP, CHIP.headline).reason, /opposite of “repair”/);
+  const REPL = { headline: 'Replace it', template_answer: 'That crack is 8 in — longer than 6 in, so most shops will say replace the windshield.', numbers: ['Crack length: 8 in', 'Repair limit: 6 in'] };
+  assert.equal(checkWording(REPL.template_answer, REPL, REPL.headline).ok, true);
+  assert.match(checkWording('That 8 in crack can usually be repaired, no need to replace it.', REPL, REPL.headline).reason, /opposite/);
+});
+
+test('fits / tight / won’t fit must be said, never contradicted', () => {
+  const f = (headline) => ({ headline, numbers: ['Narrowest: 13 ft 2 in', 'Needs: 12 ft'] });
+  assert.equal(checkWording('The narrowest spot is 13 ft 2 in, so a 12 ft shed fits.', f('Fits'), 'Fits').ok, true);
+  assert.equal(checkWording('The narrowest spot is 13 ft 2 in, so a 12 ft shed won’t fit.', f('Fits'), 'Fits').ok, false);
+  assert.equal(checkWording('At 13 ft 2 in it fits, but it’s tight.', f('Fits, but tight'), 'Fits, but tight').ok, true);
+  assert.equal(checkWording('At 13 ft 2 in a 12 ft shed won’t fit.', f('Won’t fit'), 'Won’t fit').ok, true);
+  assert.match(checkWording('At 13 ft 2 in, the 12 ft shed will fit.', f('Won’t fit'), 'Won’t fit').reason, /verdict|opposite/);
+});
+
+test('men’s and women’s shoe sizes swapped fails', () => {
+  assert.equal(checkWording(SHOE.template_answer, SHOE, SHOE.headline).ok, true);
+  assert.equal(checkWording('Your foot is 10.5 in long. That’s a US men’s 10.5 or women’s 12, about EU 44.', SHOE, SHOE.headline).ok, true);
+  assert.match(checkWording('That is a US women’s 10.5, or men’s 12.', SHOE, SHOE.headline).reason, /unit not ours: 10\.5 women’s, 12 men’s/);
+  assert.match(checkWording('Your foot is 10.5 in long, about EU 12.', SHOE, SHOE.headline).reason, /12 EU/);
+});
+
+test('numbers with units are read the same in Spanish', () => {
+  assert.equal(checkWording('Tu entrada mide unos 420 pies cuadrados (entre 370 y 470). Compra 3 galones de sellador para concreto o 2 cubetas de cinco galones de sellador para asfalto por capa.', DRIVE, DRIVE.headline).ok, true);
+  assert.match(checkWording('Tu entrada mide unos 420 pies cuadrados. Compra 2 galones de sellador.', DRIVE, DRIVE.headline).reason, /2 gallons/);
+  assert.equal(checkWording('Esa grieta de 0.5 in es más pequeña que una moneda de un cuarto de dólar, así que se puede reparar.', CHIP, CHIP.headline).ok, true);
+  assert.equal(checkWording('Tu pie mide 10.5 pulgadas: talla 10.5 de hombre o 12 de mujer, más o menos EU 44.', SHOE, SHOE.headline).ok, true);
+});
