@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { business } from './business.js';
+import { business, sightBusiness, businessById, ALL_BUSINESSES } from './business.js';
 import * as engine from './engine.js';
 import { handleMessage, addNote, getThread } from './agent.js';
 import { quoteFromPhoto, photoReply } from './photo.js';
@@ -51,7 +51,11 @@ app.get('/api/events', (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, business: business.name, mode: hasKey() ? 'muse' : 'demo', model: hasKey() ? SPARK : 'scripted demo' });
 });
-app.get('/api/business', (req, res) => res.json({ name: business.name, owner: business.owner, phone: business.phone, city: business.city }));
+// ?b=<id> names one of the demo businesses (Sight sends each job to the business that does it).
+app.get('/api/business', (req, res) => {
+  const b = (typeof req.query.b === 'string' && businessById(req.query.b)) || business;
+  res.json({ id: b.id, name: b.name, owner: b.owner, phone: b.phone || null, city: b.city, all: ALL_BUSINESSES.map((x) => ({ id: x.id, name: x.name, trade: x.trade || null })) });
+});
 app.get('/api/owner/feed', (req, res) => res.json({ ...ownerView(req), redacted: !isOwner(req) }));
 
 // Endpoints that spend Meta credits get a per-IP limit (in memory; one Render instance).
@@ -195,11 +199,13 @@ export function rememberHandoff(r, now = Date.now()) {
   for (const [k, v] of handoffs) { if (now - v.at > HANDOFF_TTL_MS) handoffs.delete(k); else break; }
   while (handoffs.size >= HANDOFF_MAX) handoffs.delete(handoffs.keys().next().value);
   const id = crypto.randomBytes(12).toString('base64url');
-  const priced = r.task === 'surface_area' && r.surface ? engine.sightQuote({ task: r.task, sqft: r.surface.sqft }) : engine.sightQuote({ task: r.task });
-  const block = { ...r.business, quote: priced ? priced.line : r.business.quote, priced: Boolean(priced) };
+  // Each job goes to the demo business that does it, priced from that business's own demo price list.
+  const biz = sightBusiness(r.task);
+  const priced = engine.sightQuote({ task: r.task, r });
+  const block = { ...r.business, quote: priced ? priced.line : r.business.quote, priced: Boolean(priced), demoPrices: true };
   // checked: 'agreed' when Muse Spark confirmed SAM's outlines; 'skipped' when its check didn't come back.
-  handoffs.set(id, { at: now, leadId: null, phoneSet: false, task: r.task, headline: r.headline, measuredAgainst: r.measuredAgainst || null, confidence: r.confidence || null, checked: r.checked || 'skipped', block, priced });
-  return { id, to: business.name, owner: business.owner, block };
+  handoffs.set(id, { at: now, leadId: null, phoneSet: false, biz: { id: biz.id, name: biz.name, owner: biz.owner, trade: biz.trade || null }, task: r.task, headline: r.headline, measuredAgainst: r.measuredAgainst || null, confidence: r.confidence || null, checked: r.checked || 'skipped', block, priced });
+  return { id, to: biz.name, owner: biz.owner, business: biz.id, block };
 }
 
 // A US phone number: 10 digits, or 11 starting with 1. Anything else (arrays, objects, 7 or 15 digits) is refused.
@@ -223,7 +229,7 @@ app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
   if (h.leadId && digits && h.phoneSet) return res.status(409).json({ ok: false, ask: 'This job is already on the board with a phone number. Call the business to change it.' });
   if (!h.leadId) {
     const lead = engine.addLead({ channel: 'sight', phone: digits || null, summary: `Sight photo: ${h.headline}`, quote: h.priced ? { serviceName: h.priced.serviceName, detail: h.priced.detail, total: h.priced.total } : null });
-    engine.updateLead(lead.id, { sight: { task: h.task, job: h.block.job, materials: h.block.materials || [], quote: h.block.quote, measuredAgainst: h.measuredAgainst, confidence: h.confidence, priced: h.block.priced, checked: h.checked } });
+    engine.updateLead(lead.id, { business: h.biz, sight: { task: h.task, job: h.block.job, materials: h.block.materials || [], quote: h.block.quote, measuredAgainst: h.measuredAgainst, confidence: h.confidence, priced: h.block.priced, checked: h.checked } });
     h.leadId = lead.id;
     h.phoneSet = Boolean(digits);
     broadcast('lead', lead);
@@ -236,9 +242,11 @@ app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
   res.json({
     ok: true,
     leadId: h.leadId,
-    to: business.name,
-    owner: business.owner,
-    message: `Sent to ${business.name}. It’s on ${business.owner}’s board now${masked ? `, and they’ll text you at ${masked}` : '; add your number if you want them to text you back'}.`,
+    to: h.biz.name,
+    owner: h.biz.owner,
+    business: h.biz.id,
+    board: `/owner.html?b=${encodeURIComponent(h.biz.id)}`,
+    message: `Sent to ${h.biz.name}. It’s on ${h.biz.owner}’s board now${masked ? `, and they’ll text you at ${masked}` : '; add your number if you want them to text you back'}.`,
   });
 }));
 
@@ -260,7 +268,7 @@ app.post('/api/measure', measureLimit, metaBudgetGate(8, live), async (req, res)
     const r = await measureAnything({ dataUrl, text: String(text).slice(0, 500), focal35, onStep: stream ? (s) => line({ type: 'step', ...progressStep(s) }) : null });
     broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
     const handoff = rememberHandoff(r);
-    const out = { ...r, business: handoff ? handoff.block : r.business, handoff: handoff ? { id: handoff.id, to: handoff.to, owner: handoff.owner } : null, pipeline: r.pipeline.map(publicStep), lens: focal35 ? 'from photo' : 'typical phone' };
+    const out = { ...r, business: handoff ? handoff.block : r.business, handoff: handoff ? { id: handoff.id, to: handoff.to, owner: handoff.owner, business: handoff.business } : null, pipeline: r.pipeline.map(publicStep), lens: focal35 ? 'from photo' : 'typical phone' };
     if (stream) { line({ type: 'result', ...out }); res.end(); } else res.json(out);
   } catch (e) {
     console.error(e);

@@ -13,7 +13,8 @@
 </header>
 <section class="board">
   <h1 id="title">Your front desk</h1>
-  <div class="sub">Every text, photo, voicemail and call, answered and logged as it happens.</div>
+  <div class="sub" id="sub">Every text, photo, voicemail and call, answered and logged as it happens.</div>
+  <nav class="bizpick" id="bizpick" aria-label="Demo businesses"></nav>
   <div class="kpis">
     <div class="kpi"><b id="kLeads">0</b><span>new leads</span></div>
     <div class="kpi"><b id="kBooked">0</b><span>jobs booked</span></div>
@@ -30,11 +31,17 @@ const leads = new Map();
 const bookings = new Map();
 const time = (iso) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
+// ?b=<id> shows one demo business's board (Sight sends each job to the business that does it);
+// without it, every demo business's leads, each tagged with its business. Front-desk leads (text,
+// photo, voicemail, call) belong to Brightside Exterior Care.
+const BIZ = new URLSearchParams(location.search).get('b');
+const FRONT_DESK = 'brightside';
+const bizOf = (l) => l.business?.id || FRONT_DESK;
 function render() {
-  const all = [...leads.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const all = [...leads.values()].filter((l) => !BIZ || bizOf(l) === BIZ).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   $('feed').innerHTML = all.length ? all.map((l) => {
     const b = l.bookingId ? bookings.get(l.bookingId) : null;
-    return `<div class="card"><div class="row"><span class="chan ${l.channel}">${esc(l.channel)}</span><b>${esc(l.name || l.phone || 'New customer')}</b>
+    return `<div class="card"><div class="row"><span class="chan ${l.channel}">${esc(l.channel)}</span>${!BIZ && l.business ? `<span class="biztag">${esc(l.business.name)}</span>` : ''}<b>${esc(l.name || l.phone || 'New customer')}</b>
       <span class="status ${l.status === 'booked' ? 'booked' : ''}">${esc(l.status)}</span><span class="when">${time(l.createdAt)}</span></div>
       ${l.summary ? `<p>${esc(l.summary)}</p>` : ''}
       ${l.transcript ? `<p><i>Voicemail:</i> "${esc(l.transcript)}"</p>` : ''}
@@ -76,7 +83,12 @@ async function refresh() {
 }
 const es = new EventSource('/api/events');
 ['hello', 'lead', 'booking', 'photo', 'voicemail', 'message', 'measure'].forEach((k) => es.addEventListener(k, refresh));
-fetch('/api/business').then((r) => r.json()).then((b) => ($('title').textContent = `${b.name}: front desk`));
+fetch(`/api/business${BIZ ? `?b=${encodeURIComponent(BIZ)}` : ''}`).then((r) => r.json()).then((b) => {
+  $('title').textContent = BIZ ? `${b.name}: owner board` : 'Owner boards: every demo business';
+  if (BIZ && BIZ !== FRONT_DESK) $('sub').textContent = `Jobs measured from one photo with First Answer Sight, sent by the customer. ${b.name} is a demo business with demo prices.`;
+  if (!BIZ) $('sub').textContent = 'Every lead, tagged with the demo business it went to. Brightside Exterior Care’s front desk also answers texts, photos, voicemails and calls.';
+  $('bizpick').innerHTML = [`<a href="/owner.html"${!BIZ ? ' class="on"' : ''}>All</a>`, ...b.all.map((x) => `<a href="/owner.html?b=${encodeURIComponent(x.id)}"${x.id === BIZ ? ' class="on"' : ''}>${esc(x.name)}</a>`)].join('');
+}).catch(() => {});
 refresh();
 </script>
 </body>

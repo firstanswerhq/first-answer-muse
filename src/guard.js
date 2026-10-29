@@ -128,6 +128,7 @@ export function redactLead(l) {
     status: l.status,
     createdAt: l.createdAt,
     bookingId: l.bookingId || null,
+    business: l.business ? { id: l.business.id, name: l.business.name } : null,
     name: null,
     phone: maskPhone(l.phone),
     summary: l.channel === 'sight' && l.sight ? l.summary : publicLabel(l),

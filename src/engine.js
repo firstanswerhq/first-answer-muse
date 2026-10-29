@@ -1,7 +1,7 @@
 // The booking engine. Every path (text, photo, voicemail) goes through these functions,
 // so a quote and a calendar slot can only ever come from here, never from the model's imagination.
 
-import { business } from './business.js';
+import { business, sightBusiness } from './business.js';
 
 const state = {
   bookings: [], // { id, slot, hours, service, quoteTotal, customer, phone, address, channel, createdAt }
@@ -63,24 +63,42 @@ export function quote({ service, count, tier, sqft }) {
   };
 }
 
-// A Sight measurement priced from the business's own price list, or null when the job isn't on it.
-// Uses the measured square feet (the middle of the range); the quote line shows the arithmetic.
-export function sightQuote({ task, sqft }) {
-  const p = business.sight?.[task];
-  if (!p || !p.perSqft) return null;
-  const a = Math.round(Number(sqft) / 10) * 10;
-  if (!Number.isFinite(a) || a < 50 || a > 20000) return null;
-  const raw = Math.round(a * p.perSqft);
-  const total = Math.max(raw, p.minimum || 0);
+// A Sight job priced from the receiving business's own (demo) price list, or null when the job isn't
+// on it (the owner prices it). r carries what was measured: surface / tile sq ft, chip verdict, shoe
+// size, shed verdict. Every line says whose price list it came from, and that it is a demo price list.
+export function sightQuote({ task, sqft, r = {} }) {
+  const biz = sightBusiness(task);
+  const p = biz.sight?.[task];
+  if (!p) return null;
   const fmt = (n) => n.toLocaleString('en-US');
-  return {
-    serviceName: p.name,
-    detail: `about ${fmt(a)} sq ft at $${p.perSqft.toFixed(2)}/sq ft${total > raw ? ` (job minimum $${p.minimum})` : ''}`,
-    line: `${fmt(a)} sq ft × $${p.perSqft.toFixed(2)} per sq ft = $${fmt(raw)}${total > raw ? `; job minimum $${fmt(p.minimum)}` : ''} (${business.name} price list)`,
-    sqft: a,
-    total,
-    note: p.note || null,
-  };
+  const src = `(${biz.name} demo price list)`;
+  const area = (x) => { const a = Math.round(Number(x)); return Number.isFinite(a) && a >= 20 && a <= 20000 ? a : null; };
+  if (p.perSqft) {
+    const a = area(sqft ?? r.surface?.sqft ?? r.job?.sqft);
+    if (!a) return null;
+    const raw = Math.round(a * p.perSqft);
+    const total = Math.max(raw, p.minimum || 0);
+    return {
+      business: biz.id, serviceName: p.name, sqft: a, total, note: p.note || null,
+      detail: `about ${fmt(a)} sq ft at $${p.perSqft.toFixed(2)}/sq ft${total > raw ? ` (job minimum $${fmt(p.minimum)})` : ''}`,
+      line: `${fmt(a)} sq ft × $${p.perSqft.toFixed(2)} per sq ft = $${fmt(raw)}${total > raw ? `; job minimum $${fmt(p.minimum)}` : ''} ${src}`,
+    };
+  }
+  if (p.kind === 'chip') {
+    if (r.chip?.repair === true) return { business: biz.id, serviceName: p.repair.name, total: p.repair.price, detail: `one ${r.chip.kind || 'chip'} repair`, line: `${p.repair.name}: $${p.repair.price} ${src}` };
+    if (r.chip?.repair === false) return { business: biz.id, serviceName: p.replace.name, total: p.replace.price, detail: `replacement; camera recalibration $${p.replace.recalibration} if the car has lane or collision cameras`, line: `${p.replace.name}: $${p.replace.price}, + $${p.replace.recalibration} camera recalibration if needed ${src}` };
+    return null;
+  }
+  if (p.kind === 'shoe') {
+    if (!r.shoe?.pick) return null;
+    return { business: biz.id, serviceName: p.name, total: p.from, detail: `US ${r.shoe.pick}, from $${p.from} a pair, ${p.fitting}`, line: `${p.name} in US ${r.shoe.pick}: from $${p.from} a pair, ${p.fitting} ${src}` };
+  }
+  if (p.kind === 'shed') {
+    // Only a shed that fits gets a price; otherwise the owner suggests a size.
+    if (!r.fit || !/^fits/.test(r.fit.verdict)) return null;
+    return { business: biz.id, serviceName: p.name, total: p.install, detail: `install $${p.install} + gravel pad $${p.padPerSqft}/sq ft (pad sized at the visit)`, line: `${p.name}: $${p.install} + gravel pad $${p.padPerSqft} per sq ft, sized at the visit ${src}` };
+  }
+  return null;
 }
 
 // ---------- time (all in the business's own time zone) ----------

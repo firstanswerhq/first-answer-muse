@@ -281,7 +281,7 @@ function renderReply(r, dataUrl) {
       <div><dt>Job size</dt><dd>${esc(biz.job)}</dd></div>
       ${mats.length ? `<div><dt>Materials</dt><dd>${mats.map(esc).join('<br>')}</dd></div>` : ''}
       <div><dt>Quote</dt><dd>${esc(biz.quote)}</dd></div>
-    </dl><p>${biz.priced ? `Price from ${esc(to)}’s own price list.` : `Not on ${esc(to)}’s price list yet, so the owner prices it.`} First Answer never makes prices up.</p>
+    </dl><p>${biz.priced ? `Demo price from ${esc(to)}’s own price list (a demo business).` : `Not on ${esc(to)}’s price list, so the owner prices it.`} First Answer never makes prices up.</p>
     ${r.handoff ? `<form class="r-send"><input type="tel" inputmode="tel" autocomplete="tel" placeholder="Your phone (optional)" aria-label="Your phone number, optional, so they can text you back"><button type="submit">Send this to ${esc(to)}</button></form><p class="r-sent" role="status" hidden></p>` : ''}</div>`;
   }
   body.innerHTML = html || `<p class="r-answer">${esc(FALLBACK_ERR)}</p>`;
@@ -343,7 +343,7 @@ async function sendToBusiness(handoff, form, out) {
   if (r?.ok) {
     form.remove();
     out.className = 'r-sent ok';
-    out.innerHTML = `${esc(r.message)} <a href="/owner.html" target="_blank" rel="noopener">See the owner board</a>`;
+    out.innerHTML = `${esc(r.message)} <a href="${esc(r.board || '/owner.html')}" target="_blank" rel="noopener">See ${esc(r.owner || 'the owner')}’s board</a>`;
   } else {
     btn.disabled = false;
     btn.textContent = `Send this to ${handoff.to}`;
