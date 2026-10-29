@@ -75,6 +75,22 @@ export async function sparkWrite({ system, facts, timeoutMs = 6000 }) {
   return String(r.choices[0].message.content || '').trim();
 }
 
+// Muse Spark looks at several images at once (the photo with SAM's outlines drawn on it, and a close-up
+// of each outline) and answers in JSON: does it agree with what SAM outlined? Short timeout, no retries.
+export async function sparkCheck({ images, prompt, schema, timeoutMs = 10000 }) {
+  spend();
+  const r = await api().chat.completions.create({
+    model: SPARK,
+    reasoning_effort: 'low',
+    messages: [
+      { role: 'developer', content: prompt },
+      { role: 'user', content: [...images.map((url) => ({ type: 'image_url', image_url: { url } })), { type: 'text', text: 'Check the outlines.' }] },
+    ],
+    response_format: { type: 'json_schema', json_schema: { name: 'outline_check', strict: true, schema } },
+  }, { timeout: timeoutMs, maxRetries: 0 });
+  return JSON.parse(r.choices[0].message.content);
+}
+
 // SAM 3.1: segment every instance of a short noun phrase. Non-streaming; same text format as the stream.
 export async function samSegment({ dataUrl, concept }) {
   spend();

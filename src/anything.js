@@ -7,7 +7,8 @@
 //      distance.js for ground distances and heights.
 //   4. The answer comes back as a number, what to buy and what to do, plus the outlines to draw.
 
-import { hasKey, sparkReadPhoto, samSegment, sparkWrite } from './muse.js';
+import { hasKey, sparkReadPhoto, samSegment, sparkWrite, sparkCheck } from './muse.js';
+import { checkImages, COLOR_NAMES } from './overlay.js';
 import { DAILY_CAP_MESSAGE } from './guard.js';
 import { measureFlat, FLAT_REFERENCES, maskBoundary } from './flat.js';
 import { best, measureSurface, garageDoorKind, REFERENCES as SURFACE_REFERENCES } from './measure.js';
@@ -37,6 +38,7 @@ ruler: the everyday object of known size in the photo, from the list; prefer one
 item_width_in: for gap_fit, the width in inches of the thing they want to fit, from their message (a 12 ft shed = 144); else 0.
 tile_w_in, tile_l_in: tile size in inches if they said it, else 0.
 shoe_for: "men", "women" or "unknown", from the message.
+language: the language their message is written in: "en" for English (or no message), "es" for Spanish, "other" for anything else.
 summary: one short plain sentence of what you see.`;
 
 const READ_SCHEMA = {
@@ -50,9 +52,10 @@ const READ_SCHEMA = {
     tile_w_in: { type: 'number' },
     tile_l_in: { type: 'number' },
     shoe_for: { type: 'string', enum: ['men', 'women', 'unknown'] },
+    language: { type: 'string', enum: ['en', 'es', 'other'] },
     summary: { type: 'string' },
   },
-  required: ['task', 'target', 'second_target', 'ruler', 'item_width_in', 'tile_w_in', 'tile_l_in', 'shoe_for', 'summary'],
+  required: ['task', 'target', 'second_target', 'ruler', 'item_width_in', 'tile_w_in', 'tile_l_in', 'shoe_for', 'language', 'summary'],
   additionalProperties: false,
 };
 
@@ -101,6 +104,7 @@ export function guessFromText(text = '') {
     tile_l_in: tile ? +tile[2] : 0,
     shoe_for: /women|woman|her\b|ladies/.test(t) ? 'women' : /\bmen\b|man\b|his\b/.test(t) ? 'men' : 'unknown',
     coin: coinFromText(t),
+    language: /[¿¡ñ]|\b(?:cu[aá]nto|cu[aá]ntos|necesito|tama[nñ]o|zapato|parabrisas|cabe|baldosas?|azulejos?|entrada|mi pie|qu[eé] talla)\b/.test(t) ? 'es' : 'en',
     _num: num,
   };
 }
@@ -174,8 +178,10 @@ const rangeIn = (mm, pm) => `${inchStr(Math.max(0, mm - pm))} – ${inchStr(mm +
 // ---------- pictures for the page ----------
 
 function outlineOf(obj, label, role) {
-  if (!obj?.mask) return obj ? { label, role, box: obj.box } : null;
-  try { return { label, role, path: decodeMaskToSVGPath(obj.mask), box: obj.box, w: obj.mask.width, h: obj.mask.height }; } catch { return { label, role, box: obj.box }; }
+  if (!obj) return null;
+  const conf = obj.c != null ? Math.round(obj.c * 100) / 100 : null;
+  if (!obj.mask) return { label, role, conf, box: obj.box };
+  try { return { label, role, conf, path: decodeMaskToSVGPath(obj.mask), box: obj.box, w: obj.mask.width, h: obj.mask.height }; } catch { return { label, role, conf, box: obj.box }; }
 }
 
 // The longest straight line across an outline, in photo pixels (for drawing the measurement).
@@ -255,18 +261,29 @@ function samResult(concepts, segs) {
 /**
  * measureAnything({ dataUrl, text, focal35, deps, onStep })
  *   deps (for tests): { read(dataUrl, prompt, schema) -> json, segment(dataUrl, concept) -> { objects, frame },
- *                       word?(system, facts) -> text }
+ *                       word?(system, facts) -> text, check?(images, prompt, schema) -> json }
  *   onStep(step): called as each step finishes (for live progress on the page).
  */
-export async function measureAnything({ dataUrl, text = '', focal35 = null, deps = null, onStep = null, wordTimeoutMs = WORD_TIMEOUT_MS }) {
+export async function measureAnything({ dataUrl, text = '', focal35 = null, deps = null, onStep = null, wordTimeoutMs = WORD_TIMEOUT_MS, checkTimeoutMs = CHECK_TIMEOUT_MS }) {
   const pipeline = makePipeline(onStep);
   const live = deps || (hasKey() ? {
     read: (d, p, s) => sparkReadPhoto({ dataUrl: d, prompt: p, schema: s }),
     segment: (d, c) => samSegment({ dataUrl: d, concept: c }),
     word: (system, facts) => sparkWrite({ system, facts, timeoutMs: WORD_TIMEOUT_MS }),
+    check: (images, prompt, schema) => sparkCheck({ images, prompt, schema, timeoutMs: CHECK_TIMEOUT_MS }),
   } : null);
   const r = await measureCore({ dataUrl, text, focal35, live, pipeline });
-  if (r.ok && live?.word) await wordAnswer(r, live, pipeline, wordTimeoutMs);
+  if (!r.ok) return r;
+  // Muse Spark checks SAM's outlines while it words the answer (in parallel, to save time). If it
+  // disagrees with what SAM outlined, no number goes out: the customer gets a specific retake tip.
+  const [chk] = await Promise.all([
+    live?.check && pipeline.check ? checkOutlines({ dataUrl, live, check: pipeline.check, pipeline, timeoutMs: checkTimeoutMs }) : null,
+    live?.word ? wordAnswer(r, live, pipeline, wordTimeoutMs) : null,
+  ]);
+  if (chk) r.checked = chk.agreed ? 'agreed' : chk.skipped ? 'skipped' : 'disagreed';
+  if (chk && chk.agreed === false) {
+    return { ...finishErr(r.read, pipeline, chk.tip, r.task, r.overlay), refused: 'spark-check', checked: 'disagreed', measuredAgainst: r.measuredAgainst };
+  }
   return r;
 }
 
@@ -283,7 +300,8 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
       pipeline.add({ model: 'muse-spark-1.3', step: 'read the photo and the question', error: String(e.message).slice(0, 200) });
     }
   }
-  if (!read) read = { task: guess.task, target: DEFAULT_TARGET[guess.task], second_target: guess.task === 'gap_fit' ? 'house wall' : '', ruler: DEFAULT_RULER[guess.task], item_width_in: guess.item_width_in, tile_w_in: guess.tile_w_in, tile_l_in: guess.tile_l_in, shoe_for: guess.shoe_for, summary: '' };
+  if (!read) read = { task: guess.task, target: DEFAULT_TARGET[guess.task], second_target: guess.task === 'gap_fit' ? 'house wall' : '', ruler: DEFAULT_RULER[guess.task], item_width_in: guess.item_width_in, tile_w_in: guess.tile_w_in, tile_l_in: guess.tile_l_in, shoe_for: guess.shoe_for, language: guess.language, summary: '' };
+  if (!read.language) read.language = guess.language;
   // The person's own words win on numbers they typed.
   if (guess.item_width_in) read.item_width_in = guess.item_width_in;
   if (guess.tile_w_in) { read.tile_w_in = guess.tile_w_in; read.tile_l_in = guess.tile_l_in; }
@@ -319,6 +337,12 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
   pipeline.add({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: samResult(concepts, segs) });
 
   const outlines = [outlineOf(target, concepts[0], 'target'), outlineOf(ruler, rulerLabel(read.ruler), 'ruler'), other && outlineOf(other, concepts[2], 'target')].filter(Boolean);
+  // What Spark will be asked to confirm, if we get as far as a number.
+  pipeline.check = { frame, items: [
+    target && { role: 'target', obj: target, name: `the ${concepts[0]}`, expect: `the ${concepts[0]} the person wants measured` },
+    other && { role: 'other', obj: other, name: `the ${concepts[2]}`, expect: `the ${concepts[2]} (the other side of the gap)` },
+    ruler && { role: 'ruler', obj: ruler, name: `a ${rulerLabel(read.ruler)}`, expect: upright ? `a ${rulerLabel(read.ruler)} standing on the ground` : `a ${rulerSpec(FLAT_REFERENCES[read.ruler] ? read.ruler : DEFAULT_RULER[read.task])}`, ruler: read.ruler },
+  ].filter(Boolean) };
   const overlay = { frame, outlines, lines: [] };
   const base = { task: read.task, read, overlay, pipeline };
 
@@ -554,6 +578,10 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
   const refKind = front ? 'front_door' : door ? garageDoorKind(door.box) : 'double_garage_door';
   const R = SURFACE_REFERENCES[refKind];
   const overlay = { frame, outlines: [outlineOf(surface, concepts[0], 'target'), outlineOf(door, R.label, 'ruler')].filter(Boolean), lines: [] };
+  pipeline.check = { frame, items: [
+    surface && { role: 'target', obj: surface, name: `the ${concepts[0]}`, expect: `the whole ${concepts[0]} (the ground surface to measure)` },
+    door && { role: 'ruler', obj: door, name: `a ${R.label}`, expect: `a ${rulerSpec(refKind)}`, ruler: refKind },
+  ].filter(Boolean) };
   if (!surface) return finishErr(read, pipeline, `I couldn’t find the ${concepts[0]} in that photo. Stand at the street end so all of it is in the shot.`, null, overlay);
   if (!door) return finishErr(read, pipeline, `I need the ${front ? 'front door' : 'garage door'} in the shot as the ruler. Stand at the street end of the ${concepts[0]} so the ${front ? 'door' : 'garage door'} is at the far end, and send one more.`, null, overlay);
   if (!frame) return finishErr(read, pipeline, 'Couldn’t read the photo size; please send it again.', null, overlay);
@@ -602,8 +630,11 @@ Use ONLY the facts in the JSON you are given. Write 2 or 3 short, plain sentence
 Numbers: copy every number exactly as it appears in the facts, with its unit. Never round, convert, add, average or calculate. Never write a number that is not in the facts, and never spell numbers out as words.
 No prices, no dates, no greetings, no emoji, no markdown, no lists. Do not mention AI, models or photos being analyzed.`;
 
+export const WORD_PROMPT_ES = `
+Write the message in Spanish (plain Latin American Spanish, as you would text a customer). Keep every number exactly as in the facts, as digits, and write its unit in Spanish: sq ft = pies cuadrados, sq in = pulgadas cuadradas, gallons = galones, five-gallon pails = cubetas de cinco galones, in = pulgadas, ft = pies, tiles = baldosas, men’s = de hombre, women’s = de mujer, US stays EE. UU. before the number, EU stays EU before the number, mm and cm stay. A quarter (the coin) is "una moneda de un cuarto de dólar". Repair = reparar, replace = reemplazar, fits = cabe, won't fit = no cabe, tight = justo.`;
+
 const NUM_RE = /\d+(?:,\d{3})*(?:\.\d+)?(?:\/\d+)?/g;
-const NUMBER_WORDS = /\b(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|dozen|half|halves|quarter|third|double|twice|triple|single|once)\b/gi;
+const NUMBER_WORDS = /(?<![\p{L}])(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|dozen|half|halves|quarter|third|double|twice|triple|single|once|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|doce|quince|veinte|treinta|cuarenta|cincuenta|cien|ciento|mil|docena|mitad|doble|triple)(?![\p{L}])/giu;
 const normNum = (n) => n.replace(/,(?=\d{3}\b)/g, '').replace(/\.0+$/, '');
 
 // The numbers (and number words) a text uses.
@@ -708,7 +739,9 @@ export function checkWording(text, facts, headline = '') {
   const wrongUnit = numberUnits(t).filter((p) => p.unit && !factPairs.has(`${p.n} ${p.unit}`));
   if (wrongUnit.length) return { ok: false, reason: `unit not ours: ${[...new Set(wrongUnit.map((p) => `${p.n} ${UNIT_NAME[p.unit]}`))].join(', ')}` };
   const factWords = new Set([...factText.matchAll(NUMBER_WORDS)].map((m) => m[0].toLowerCase()));
-  const badWords = [...t.matchAll(NUMBER_WORDS)].map((m) => m[0].toLowerCase()).filter((w) => !factWords.has(w));
+  // "cubetas de cinco galones" is how Spanish says the facts' "five-gallon pails".
+  const tWords = /five[- ]gallon/i.test(factText) ? t.replace(/cubetas?\s+de\s+cinco\s+galones/gi, 'pails') : t;
+  const badWords = [...tWords.matchAll(NUMBER_WORDS)].map((m) => m[0].toLowerCase()).filter((w) => !factWords.has(w));
   if (badWords.length) return { ok: false, reason: `number words not ours: ${[...new Set(badWords)].join(', ')}` };
   if (/\$|€|£/.test(t) && !/\$|€|£/.test(factText)) return { ok: false, reason: 'money' };
   const main = numberUnits(headline)[0];
@@ -742,28 +775,102 @@ export function wordingFacts(r) {
 
 async function wordAnswer(r, live, pipeline, timeoutMs = WORD_TIMEOUT_MS) {
   const facts = wordingFacts(r);
+  const lang = r.read?.language === 'es' ? 'es' : 'en';
   r.answerTemplate = r.answer;
   r.wording = 'template';
-  const step = { model: 'muse-spark-1.3', step: 'word the answer from our numbers' };
+  const t0 = performance.now();
+  const step = { model: 'muse-spark-1.3', step: lang === 'es' ? 'word the answer in Spanish from our numbers' : 'word the answer from our numbers' };
+  const ms = () => Math.round(performance.now() - t0);
   let timer;
   try {
     const text = await Promise.race([
-      live.word(WORD_PROMPT, JSON.stringify(facts)),
+      live.word(lang === 'es' ? WORD_PROMPT + WORD_PROMPT_ES : WORD_PROMPT, JSON.stringify(facts)),
       new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no reply in ${timeoutMs / 1000} s`)), timeoutMs); }),
     ]);
     const check = checkWording(text, facts, r.headline);
     if (check.ok) {
       r.answer = String(text).trim();
       r.wording = 'spark';
-      pipeline.add({ ...step, result: { used: true, numbersChecked: numbersIn(text).length } });
+      r.language = lang;
+      pipeline.add({ ...step, ms: ms(), result: { used: true, numbersChecked: numbersIn(text).length, language: lang } });
     } else {
-      pipeline.add({ ...step, result: { used: false, fellBack: check.reason } });
+      pipeline.add({ ...step, ms: ms(), result: { used: false, fellBack: check.reason } });
     }
   } catch (e) {
-    pipeline.add({ ...step, error: String(e.message).slice(0, 200), result: { used: false, fellBack: friendlyError(e.message) } });
+    pipeline.add({ ...step, ms: ms(), error: String(e.message).slice(0, 200), result: { used: false, fellBack: friendlyError(e.message) } });
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ---------- Muse Spark checks SAM's work ----------
+//
+// Before a number goes out, Spark looks at the photo with SAM's outlines drawn on it (and a close-up
+// of each) and says whether each outline is what we think it is. If it isn't, the customer gets a
+// specific retake tip instead of a wrong number. If Spark is slow or fails, we say so and measure
+// without the check.
+
+export const CHECK_TIMEOUT_MS = 10000;
+const COLOR_OF = { target: COLOR_NAMES.target, ruler: COLOR_NAMES.ruler, other: 'BLUE' };
+
+export const CHECK_SCHEMA = {
+  type: 'object',
+  properties: {
+    outlines: { type: 'array', items: { type: 'object', properties: { color: { type: 'string' }, ok: { type: 'boolean' }, seen: { type: 'string' } }, required: ['color', 'ok', 'seen'], additionalProperties: false } },
+    problem: { type: 'string' },
+    retake_tip: { type: 'string' },
+  },
+  required: ['outlines', 'problem', 'retake_tip'],
+  additionalProperties: false,
+};
+
+export function checkPrompt(items, withCrops) {
+  const lines = items.map((it) => `- ${COLOR_OF[it.role]} outline: should be ${it.expect}.`).join('\n');
+  return `You check another model's work before First Answer sends someone a measurement. Meta SAM 3.1 outlined objects in the customer's photo; our geometry will measure the first one using the ${COLOR_NAMES.ruler} one as a ruler of known size.
+Image 1 is the photo with the outlines drawn on it.${withCrops ? ' The next images are close-ups of each outline, in this order: ' + items.map((it) => COLOR_OF[it.role]).join(', ') + '.' : ''}
+${lines}
+For each outline, in that order, return color, ok (true only if the outline really is that thing, mostly whole, not a different object, not a reflection or a picture of it), and seen (a short phrase naming what is actually inside it; for a coin, name the coin).
+problem: one short sentence on what is wrong, or "" if every outline is right.
+retake_tip: if something is wrong, one short sentence telling the person how to retake the photo; else "". Never write numbers or measurements.`;
+}
+
+async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK_TIMEOUT_MS }) {
+  const items = check.items.filter((it) => it.obj);
+  if (!items.length) return null;
+  const t0 = performance.now();
+  const step = { model: 'muse-spark-1.3', step: 'check SAM’s outlines on the photo' };
+  let timer;
+  try {
+    const pics = checkImages(dataUrl, items.map((it) => ({ role: it.role === 'other' ? 'target' : it.role, obj: it.obj })), check.frame);
+    const images = pics ? [pics.overlay, ...pics.crops.map((c) => c.url)] : [dataUrl];
+    const ans = await Promise.race([
+      live.check(images, checkPrompt(items, Boolean(pics)), CHECK_SCHEMA),
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no reply in ${timeoutMs / 1000} s`)), timeoutMs); }),
+    ]);
+    const got = Array.isArray(ans?.outlines) ? ans.outlines : [];
+    const outlines = items.map((it, i) => ({ color: COLOR_OF[it.role], ok: got[i]?.ok !== false, seen: String(got[i]?.seen || '').slice(0, 60) || 'something else', role: it.role, ruler: it.ruler, name: it.name }));
+    const agreed = got.length >= items.length && outlines.every((o) => o.ok);
+    const problem = String(ans?.problem || '').slice(0, 160);
+    pipeline.add({ ...step, ms: Math.round(performance.now() - t0), result: { check: agreed ? 'agrees' : 'disagrees', outlines: outlines.map(({ color, ok, seen }) => ({ color, ok, seen })), problem: agreed ? '' : problem, images: images.length } });
+    if (agreed) return { agreed: true };
+    return { agreed: false, tip: retakeTip(outlines, ans?.retake_tip) };
+  } catch (e) {
+    pipeline.add({ ...step, ms: Math.round(performance.now() - t0), error: String(e.message).slice(0, 200), result: { check: 'skipped', why: friendlyError(e.message) } });
+    return { skipped: true };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The retake tip the customer sees. A wrong coin gets the fix in their words ("it's a dime");
+// Spark's own tip is used only if it is short and has no numbers in it.
+function retakeTip(outlines, sparkTip) {
+  const bad = outlines.find((o) => !o.ok) || outlines[0];
+  const coin = bad.role === 'ruler' && FLAT_REFERENCES[bad.ruler]?.shape === 'circle' ? coinFromText(bad.seen.toLowerCase()) : null;
+  if (coin && coin !== bad.ruler) return `Muse Spark says the coin looks like a ${rulerLabel(coin)}, not a ${rulerLabel(bad.ruler)}, so I didn’t measure. If it is, send the photo again and say “it’s a ${rulerLabel(coin)}”.`;
+  const tip = String(sparkTip || '').trim();
+  const own = tip && tip.length <= 200 && !/\d/.test(tip) ? tip : `Retake it with ${bad.name} whole, in focus and near the middle of the shot.`;
+  return `I didn’t measure this one: Muse Spark checked SAM’s ${bad.color.toLowerCase()} outline and saw ${bad.seen}, not ${bad.name}. ${own}`;
 }
 
 // A failed call in a few plain words for the public panel; raw upstream bodies never reach the page.
@@ -789,8 +896,13 @@ export function stepDetail(s) {
   const r = s.result;
   if (!r) return '';
   if (Array.isArray(r.objects)) return r.objects.map((o) => `${o.concept}: ${o.count} outline${o.count === 1 ? '' : 's'}${o.conf != null ? ` (conf ${o.conf.toFixed(2)})` : ''}`).join(' · ');
-  if ('used' in r) return r.used ? `used; ${r.numbersChecked} number${r.numbersChecked === 1 ? '' : 's'} checked against ours` : `kept our template (${r.fellBack})`;
-  if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}`;
+  if ('used' in r) return r.used ? `used${r.language === 'es' ? ' (Spanish)' : ''}; ${r.numbersChecked} number${r.numbersChecked === 1 ? '' : 's'} checked against ours` : `kept our template (${r.fellBack})`;
+  if ('check' in r) {
+    if (r.check === 'skipped') return `check skipped (${r.why}); measured without it`;
+    const seen = (r.outlines || []).map((o) => `${o.color.toLowerCase()} = ${o.seen}`).join(', ');
+    return r.check === 'agrees' ? `agrees: ${seen}` : `disagrees: ${r.problem || seen}; no number sent`;
+  }
+  if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}${r.language === 'es' ? ' · language: Spanish' : ''}`;
   const pretty = (k) => k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/Mm2\b/, ' mm²').replace(/Mm\b/, ' mm').replace(/Ft\b/, ' ft').replace(/In2\b/, ' sq in').replace(/Pct\b/, ' %').toLowerCase();
   const keep = Object.entries(r).filter(([k, v]) => !['ok', 'notes', 'reason', 'clipped'].includes(k) && v != null && ['number', 'string', 'boolean'].includes(typeof v));
   return keep.slice(0, 5).map(([k, v]) => `${pretty(k)}: ${typeof v === 'number' ? (k.endsWith('Pct') ? `±${Math.round(v * 100)}` : Math.round(v * 100) / 100) : v}`).join(' · ');
