@@ -529,4 +529,9 @@ fetch('/api/measure/samples')
   })
   .catch(() => {});
 
+// The privacy line names the route photos really take (direct to Meta, or through the relay).
+fetch('/api/health').then((r) => r.json()).then((h) => {
+  if (h.relay === 'direct') $('privacyRoute').textContent = 'Your photo and message go from our server straight to Meta’s Muse Spark and SAM 3.1';
+}).catch(() => {});
+
 bubble('note', 'Text one photo and a question. Put a gift card, quarter, sheet of paper, soda can, or a door in the shot and it becomes the ruler.');

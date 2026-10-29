@@ -268,3 +268,6 @@ body {
   .m-phone { border-radius: 24px 24px 0 0; border-bottom: 0; flex: 1 1 0; height: auto; min-height: 0; box-shadow: 0 -10px 40px rgba(0,0,0,.4); }
   .msg.reply, .msg.working { max-width: 97%; width: 97%; }
 }
+
+.m-privacy { margin: 0; padding: 0 4px; font-size: 12px; line-height: 1.5; color: var(--mute); }
+.m-privacy b { color: #c4d3ea; }

@@ -49,7 +49,7 @@ app.get('/api/events', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, business: business.name, mode: hasKey() ? 'muse' : 'demo', model: hasKey() ? SPARK : 'scripted demo' });
+  res.json({ ok: true, business: business.name, mode: hasKey() ? 'muse' : 'demo', model: hasKey() ? SPARK : 'scripted demo', relay: RELAY_URL ? 'supabase' : 'direct' });
 });
 // ?b=<id> names one of the demo businesses (Sight sends each job to the business that does it).
 app.get('/api/business', (req, res) => {
