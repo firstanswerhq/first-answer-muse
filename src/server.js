@@ -16,6 +16,7 @@ import { quoteFromPhoto, photoReply } from './photo.js';
 import { measureAnything } from './anything.js';
 import { readExif } from './distance.js';
 import fs from 'node:fs';
+import { rateLimiter, tokenOk, redactSnapshot } from './guard.js';
 import { hasKey, transcribeWav, openRealtimeTranscription, SPARK, BASE_URL, DIRECT_URL, RELAY_URL, relayHeaders } from './muse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,15 +26,21 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 32 * 1024 * 1024 } });
 
 // ---- owner live feed (server-sent events) ----
+// The owner board is public in the demo, so by default it shows redacted leads (no phone numbers,
+// addresses or voicemail text). With OWNER_TOKEN set, /owner.html?key=<token> shows everything.
+// The event stream only says *that* something happened; the board then re-reads /api/owner/feed.
+const ownerKey = (req) => req.get('x-owner-key') || req.query.key;
+const isOwner = (req) => tokenOk(ownerKey(req), process.env.OWNER_TOKEN);
+const ownerView = (req) => (isOwner(req) ? engine.snapshot() : redactSnapshot(engine.snapshot()));
 const listeners = new Set();
-export function broadcast(kind, data) {
-  const msg = `event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`;
+export function broadcast(kind, data = {}) {
+  const msg = `event: ${kind}\ndata: ${JSON.stringify({ kind, leadId: data.leadId || null, at: new Date().toISOString() })}\n\n`;
   for (const res of listeners) res.write(msg);
 }
 app.get('/api/events', (req, res) => {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   res.flushHeaders();
-  res.write(`event: hello\ndata: ${JSON.stringify(engine.snapshot())}\n\n`);
+  res.write(`event: hello\ndata: ${JSON.stringify({ kind: 'hello', at: new Date().toISOString() })}\n\n`);
   listeners.add(res);
   req.on('close', () => listeners.delete(res));
 });
@@ -42,7 +49,11 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, business: business.name, mode: hasKey() ? 'muse' : 'demo', model: hasKey() ? SPARK : 'scripted demo' });
 });
 app.get('/api/business', (req, res) => res.json({ name: business.name, owner: business.owner, phone: business.phone, city: business.city }));
-app.get('/api/owner/feed', (req, res) => res.json(engine.snapshot()));
+app.get('/api/owner/feed', (req, res) => res.json({ ...ownerView(req), redacted: !isOwner(req) }));
+
+// Endpoints that spend Meta credits get a per-IP limit (in memory; one Render instance).
+export const measureLimit = rateLimiter({ max: Number(process.env.MEASURE_LIMIT) || 20, windowMs: 10 * 60 * 1000 });
+export const deskLimit = rateLimiter({ max: Number(process.env.DESK_LIMIT) || 60, windowMs: 10 * 60 * 1000, message: 'That’s a lot of messages in a few minutes. Give it a few minutes and try again.' });
 
 function ensureLead(threadId, channel, phone, summary) {
   const t = getThread(threadId);
@@ -78,7 +89,11 @@ const reqId = (r) => r.headers.get('x-request-id') || r.headers.get('request-id'
 const route = (r) => r.headers.get('x-route') || null;
 
 // Which models this key can reach (names only; the key is never returned).
+// Without the DIAG_TOKEN (header x-diag-token or ?token=) this is basic health only: the probes spend credits.
 app.get('/api/diag', safe(async (req, res) => {
+  if (!tokenOk(req.get('x-diag-token') || req.query.token, process.env.DIAG_TOKEN)) {
+    return res.json({ ok: true, mode: hasKey() ? 'muse' : 'demo', detail: 'basic health only; send the diag token for model probes' });
+  }
   if (!hasKey()) return res.json({ mode: 'demo' });
   // ?direct=1 skips the relay so the two paths can be compared.
   const direct = Boolean(req.query.direct) || !RELAY_URL;
@@ -103,7 +118,7 @@ app.get('/api/diag', safe(async (req, res) => {
 }));
 
 // ---- text ----
-app.post('/api/message', safe(async (req, res) => {
+app.post('/api/message', deskLimit, safe(async (req, res) => {
   const { threadId, text, phone } = req.body || {};
   if (!threadId || !text) return res.status(400).json({ error: 'threadId and text are required' });
   ensureLead(threadId, 'text', phone, text.slice(0, 140));
@@ -113,7 +128,7 @@ app.post('/api/message', safe(async (req, res) => {
 }));
 
 // ---- photo ----
-app.post('/api/photo', safe(async (req, res) => {
+app.post('/api/photo', deskLimit, safe(async (req, res) => {
   const { threadId, dataUrl, text = '', phone } = req.body || {};
   if (!threadId || !/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ error: 'threadId and a PNG, JPEG or WebP photo are required' });
   const t = ensureLead(threadId, 'photo', phone, 'Sent a photo');
@@ -141,7 +156,7 @@ app.post('/api/photo', safe(async (req, res) => {
 }));
 
 // ---- measure anything: one photo + one line of text ----
-app.post('/api/measure', safe(async (req, res) => {
+app.post('/api/measure', measureLimit, safe(async (req, res) => {
   const { dataUrl, text = '', exifB64 = '' } = req.body || {};
   if (!/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ ok: false, ask: 'Send a PNG, JPEG or WebP photo.' });
   let focal35 = null;
@@ -169,7 +184,7 @@ app.get('/api/measure/samples', (req, res) => {
 // ---- voicemail ----
 const DEMO_VOICEMAIL = "Hi, this is Marcus over on Belmont Boulevard. I've got a two-car driveway that's covered in oil stains and I want it pressure washed before my daughter's party on the fifteenth. Call or text me back. Thanks.";
 
-app.post('/api/voicemail', upload.single('audio'), safe(async (req, res) => {
+app.post('/api/voicemail', deskLimit, upload.single('audio'), safe(async (req, res) => {
   const { threadId, phone } = req.body || {};
   if (!threadId) return res.status(400).json({ error: 'threadId is required' });
   let transcript;

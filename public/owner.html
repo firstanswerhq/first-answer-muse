@@ -48,14 +48,17 @@ function render() {
   $('kMissed').textContent = all.filter((l) => l.status === 'new' || l.status === 'needs owner').length;
 }
 
+// Full details only with the owner key (?key=...); otherwise the server sends a redacted demo view.
+const key = new URLSearchParams(location.search).get('key');
+const q = key ? `?key=${encodeURIComponent(key)}` : '';
 async function refresh() {
-  const s = await (await fetch('/api/owner/feed')).json();
+  const s = await (await fetch(`/api/owner/feed${q}`)).json();
   s.leads.forEach((l) => leads.set(l.id, l));
   s.bookings.forEach((b) => bookings.set(b.id, b));
   render();
 }
-const es = new EventSource('/api/events');
-['hello', 'lead', 'booking', 'photo', 'voicemail', 'message'].forEach((k) => es.addEventListener(k, refresh));
+const es = new EventSource(`/api/events${q}`);
+['hello', 'lead', 'booking', 'photo', 'voicemail', 'message', 'measure'].forEach((k) => es.addEventListener(k, refresh));
 fetch('/api/business').then((r) => r.json()).then((b) => ($('title').textContent = `${b.name}: front desk`));
 refresh();
 </script>
