@@ -166,6 +166,9 @@ app.post('/api/photo', photoLimit, metaBudgetGate(5, live), safe(async (req, res
 // What the page sees of each step: which model, what it did, how long, and its real numbers
 // (SAM's outline counts and confidence, Spark's read, our math's result) as one readable line.
 const publicStep = (s) => ({ model: s.model, step: s.step, failed: Boolean(s.error), ms: s.ms ?? null, detail: stepDetail(s), objects: s.result?.objects || undefined });
+// While measuring, the progress lines say only which step finished: a number our math found may still
+// be withheld if Spark's check disagrees, so step details arrive with the final result only.
+const progressStep = (s) => ({ model: s.model, step: s.step, failed: Boolean(s.error), ms: s.ms ?? null });
 
 // Errors in words a person can act on.
 export function measureErrorMessage(e) {
@@ -236,7 +239,7 @@ app.post('/api/measure', measureLimit, metaBudgetGate(8, live), async (req, res)
     line({ type: 'start' });
   }
   try {
-    const r = await measureAnything({ dataUrl, text: String(text).slice(0, 500), focal35, onStep: stream ? (s) => line({ type: 'step', ...publicStep(s) }) : null });
+    const r = await measureAnything({ dataUrl, text: String(text).slice(0, 500), focal35, onStep: stream ? (s) => line({ type: 'step', ...progressStep(s) }) : null });
     broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
     const handoff = rememberHandoff(r);
     const out = { ...r, business: handoff ? handoff.block : r.business, handoff: handoff ? { id: handoff.id, to: handoff.to, owner: handoff.owner } : null, pipeline: r.pipeline.map(publicStep), lens: focal35 ? 'from photo' : 'typical phone' };

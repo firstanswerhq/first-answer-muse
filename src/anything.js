@@ -285,7 +285,7 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
     // The wording ran alongside the check; it is not sent, and the panel says so.
     const w = pipeline.find((p) => /word the answer/.test(p.step));
     if (w) { w.result = { used: false, fellBack: 'not sent: Spark’s check disagreed' }; delete w.error; }
-    return { ...finishErr(r.read, pipeline, chk.tip, r.task, r.overlay), refused: 'spark-check', checked: 'disagreed' };
+    return refuse(r, pipeline, chk.tip);
   }
   return r;
 }
@@ -941,8 +941,9 @@ export function stepDetail(s) {
     if (r.check === 'skipped') return `check skipped (${r.why}); measured without it`;
     // The page draws its own colors, so the panel names each outline by its role, not the color Spark saw.
     const seen = (r.outlines || []).map((o) => `${ROLE_WORD[o.color] || o.color.toLowerCase()}: ${o.seen}`).join(', ');
-    return r.check === 'agrees' ? `agrees · ${seen}` : `disagrees · ${uncolor(r.problem) || seen}; no number sent`;
+    return r.check === 'agrees' ? `agrees · ${seen}` : `disagrees · ${uncolor(r.problem).replace(/[\s.!?;,]+$/, '') || seen}; no number sent`;
   }
+  if (r.withheld) return 'measured, but not sent: Spark disagreed with the outlines';
   if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}${r.language === 'es' ? ' · language: Spanish' : ''}`;
   const pretty = (k) => k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/Mm2\b/, ' mm²').replace(/Mm\b/, ' mm').replace(/Ft\b/, ' ft').replace(/In2\b/, ' sq in').replace(/Pct\b/, ' %').toLowerCase();
   const keep = Object.entries(r).filter(([k, v]) => !['ok', 'notes', 'reason', 'clipped'].includes(k) && v != null && ['number', 'string', 'boolean'].includes(typeof v));
@@ -954,6 +955,14 @@ const rulerLabel = (k) => FLAT_REFERENCES[k]?.label || UPRIGHT[k]?.label || k;
 
 // SAM didn't answer: say why in words a person can act on.
 const samDown = (e) => (e?.name === 'MetaBudgetError' ? DAILY_CAP_MESSAGE : 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.');
+
+// A refused answer shows no number anywhere: not in the steps (our math's results are withheld),
+// not on the photo (no measurement lines or labels), only SAM's outlines and the retake tip.
+function refuse(r, pipeline, tip) {
+  for (const p of pipeline) if (p.model === 'first-answer math' && p.result) { p.result = { withheld: true }; delete p.error; }
+  const overlay = r.overlay ? { ...r.overlay, lines: [] } : null;
+  return { ...finishErr(r.read, pipeline, tip, r.task, overlay), refused: 'spark-check', checked: 'disagreed' };
+}
 
 function finish(r) {
   return { ok: true, note: null, business: null, ...r };

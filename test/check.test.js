@@ -142,3 +142,18 @@ test('a refused answer’s panel says the wording was not sent', async () => {
   assert.match(stepDetail(r.pipeline.find((p) => /word the answer/.test(p.step))), /not sent: Spark’s check disagreed/);
   assert.equal(r.answer, null);
 });
+
+test('a refused answer shows no number in any step, or on the photo', async () => {
+  const r = await run(async () => ({ outlines: [{ color: 'MAGENTA', ok: false, seen: 'the driveway' }, { color: 'ORANGE', ok: true, seen: 'quarter' }], problem: 'The outline covers the whole driveway.', retake_tip: '' }), { word: async (_s, f) => JSON.parse(f).first_sentence_already_written ? 'Put clear tape over it.' : 'x' });
+  assert.equal(r.ok, false);
+  const details = r.pipeline.map(stepDetail);
+  const math = r.pipeline.filter((p) => p.model === 'first-answer math');
+  assert.ok(math.length >= 1);
+  for (const p of math) assert.equal(stepDetail(p), 'measured, but not sent: Spark disagreed with the outlines');
+  // Only SAM's confidences may carry digits; no inches, mm, sq ft anywhere.
+  for (const d of details) assert.doesNotMatch(d.replace(/conf \d\.\d\d|\d+ outlines?/g, ''), /\d/, d);
+  assert.deepEqual(r.overlay.lines, []);
+  const chk = details.find((d) => /disagrees/.test(d));
+  assert.match(chk, /whole driveway; no number sent$/);
+  assert.doesNotMatch(chk, /\.;/);
+});
