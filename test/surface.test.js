@@ -85,3 +85,14 @@ test('sealer math rounds up', () => {
   assert.deepEqual(sealerNeeded(600, 'asphalt').map((x) => x.qty), [2]);
   assert.equal(sealerNeeded(100).length, 2);
 });
+
+test('every answer for a business carries job size, materials and a quote line with no invented price', async () => {
+  const r = await measureAnything({
+    dataUrl: 'x', text: 'how big is my driveway',
+    deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door' }), driveway(TWO_CAR)),
+  });
+  assert.match(r.business.job, /^Driveway: about [\d,]+ sq ft/);
+  assert.ok(r.business.materials.length >= 1);
+  assert.match(r.business.quote, /\$X per sq ft \(set by the business\)/);
+  assert.doesNotMatch(JSON.stringify(r.business), /\$\d/);
+});

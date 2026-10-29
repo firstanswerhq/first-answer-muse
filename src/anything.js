@@ -337,6 +337,11 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
       return finish({
         ...base,
         headline: fit ? cap(fit.verdict) : `${ftIn(g.tightest.ft)} at the narrowest`,
+        business: {
+          job: itemFt ? `Shed install: a ${ftIn(itemFt)} wide unit in a ${ftIn(g.tightest.ft)} gap (${fit.verdict})` : `Side-yard gap: ${ftIn(g.tightest.ft)} at the narrowest, ${ftIn(g.typical.ft)} typical`,
+          materials: itemFt ? [`${ftIn(itemFt)} wide shed kit`, 'Gravel or paver pad, a little bigger than the shed'] : ['Depends on what goes in the gap'],
+          quote: 'Install: $X per shed + $Y per sq ft of pad (set by the business)',
+        },
         answer: fit ? fit.text : `The gap is about ${ftIn(g.typical.ft)}, and ${ftIn(g.tightest.ft)} at the narrowest spot.`,
         numbers: [
           { label: 'Narrowest', value: ftIn(g.tightest.ft) },
@@ -356,6 +361,11 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
     return finish({
       ...base,
       headline: ftIn(m.ft),
+      business: {
+        job: `${cap(concepts[0])}: about ${ftIn(m.ft)} ${read.task === 'height' ? 'tall' : 'away'} (${ftIn(m.low)} – ${ftIn(m.high)})`,
+        materials: [],
+        quote: read.task === 'height' ? `$X per job for a ${concepts[0]} this tall (set by the business)` : '$X per job (set by the business)',
+      },
       answer: `${cap(concepts[0])}: about ${ftIn(m.ft)} ${read.task === 'height' ? 'tall' : 'away'} (between ${ftIn(m.low)} and ${ftIn(m.high)}).`,
       numbers: [{ label: read.task === 'height' ? 'Height' : 'Distance', value: ftIn(m.ft) }, { label: 'Range', value: `${ftIn(m.low)} – ${ftIn(m.high)}` }],
       shopping: [], steps: [], confidence: m.confidence,
@@ -383,6 +393,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
     return finish({
       ...base,
       headline: `Size ${s.pick}`,
+      business: { job: `Shoe fitting: US ${s.pick}, ${widthWord} width`, materials: [`Shoes in US ${s.pick} (about EU ${s.eu})`], quote: '$X per pair (set by the store)' },
       answer: `Your foot is ${inchStr(m.lengthMm)} long (${(m.lengthMm / 10).toFixed(1)} cm). That’s a US ${s.pick}, about EU ${s.eu}.`,
       numbers: [{ label: 'Foot length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'Range', value: `${rangeIn(m.lengthMm, pm)} (±${pmPct}%)` }, { label: 'US men’s', value: String(s.men) }, { label: 'US women’s', value: String(s.women) }, { label: 'EU', value: String(s.eu) }],
       shopping: [], steps: ['Measure both feet and go by the bigger one.', 'Feet swell a little by evening; measure then if you can.', 'Between sizes, go half a size up.'],
@@ -396,6 +407,9 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
     return finish({
       ...base,
       headline: v.repair ? 'Repair it' : 'Replace it',
+      business: v.repair
+        ? { job: `Windshield ${v.kind} repair: ${inchStr(m.lengthMm)} ${v.kind}`, materials: ['Resin repair kit'], quote: '$X per chip repair (set by the business)' }
+        : { job: `Windshield replacement: ${inchStr(m.lengthMm)} ${v.kind}`, materials: ['Windshield glass', 'Camera recalibration if the car has lane or collision cameras'], quote: '$X per windshield + $Y recalibration (set by the business)' },
       answer: v.text,
       numbers: [{ label: v.kind === 'crack' ? 'Crack length' : 'Chip size', value: inchStr(m.lengthMm) }, { label: 'Range', value: `${rangeIn(m.lengthMm, pm)} (±${pmPct}%)` }, { label: 'Repair limit', value: v.kind === 'crack' ? '6 in' : '1 in (a quarter)' }],
       shopping: v.repair ? ['Windshield chip repair (many insurers cover it — check your policy)'] : ['Windshield replacement'],
@@ -415,6 +429,11 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
     return finish({
       ...base,
       headline: `Buy ${p.buyTiles} tiles`,
+      business: {
+        job: `Tile a ${ftIn(roomW / 12)} × ${ftIn(roomL / 12)} floor: ${p.room.sqft} sq ft`,
+        materials: [`${p.buyTiles} tiles, ${tw} × ${tl} in`, 'Thinset, grout and spacers'],
+        quote: `${p.room.sqft} sq ft × $X per sq ft installed (set by the business)`,
+      },
       answer: `The floor is about ${ftIn(roomW / 12)} by ${ftIn(roomL / 12)} (${p.room.sqft} sq ft). In ${tw} × ${tl} in tile that’s ${p.tilesForFloor} tiles laid, plus ${p.extraPct}% extra for cuts and mistakes: buy ${p.buyTiles}.`,
       numbers: [{ label: 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: 'Area', value: `${p.room.sqft} sq ft` }, { label: 'Range', value: `${Math.round(p.room.sqft * (1 - 2 * m.plusMinusPct))} – ${Math.round(p.room.sqft * (1 + 2 * m.plusMinusPct))} sq ft (±${2 * pmPct}%)` }, { label: 'Full tiles', value: String(p.fullTiles) }, { label: 'Buy', value: `${p.buyTiles} tiles (+${p.extraPct}%)` }],
       shopping: [`${p.buyTiles} tiles, ${tw} × ${tl} in (same lot number on every box)`, 'Thinset mortar and a notched trowel (ask the store which notch fits your tile)', 'Grout and 1/8 in spacers', 'Tile cutter or wet saw'],
@@ -436,6 +455,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
     return finish({
       ...base,
       headline: sq ? `${inchStr(m.rectLengthMm)} square` : `${inchStr(m.rectLengthMm)} × ${inchStr(m.rectWidthMm)}`,
+      business: { job: `${cap(concepts[0])}: ${inchStr(m.rectLengthMm)} × ${inchStr(m.rectWidthMm)}`, materials: [], quote: '$X for this size (set by the business)' },
       answer: `${cap(concepts[0])}: ${inchStr(m.rectLengthMm)} × ${inchStr(m.rectWidthMm)} (${(m.rectLengthMm / 10).toFixed(1)} × ${(m.rectWidthMm / 10).toFixed(1)} cm), measured against the ${m.ruler}.`,
       numbers: [{ label: 'Long side', value: `${inchStr(m.rectLengthMm)} · ${(m.rectLengthMm / 10).toFixed(1)} cm` }, { label: 'Short side', value: `${inchStr(m.rectWidthMm)} · ${(m.rectWidthMm / 10).toFixed(1)} cm` }, { label: 'Accuracy', value: `±${inchStr(m.rectLengthMm * m.plusMinusPct)} (±${pmPct}%)` }, { label: 'Area', value: `${m.areaIn2} sq in` }],
       shopping: [], steps: ['Send the same shot again later to see if it changed.'],
@@ -446,6 +466,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
   return finish({
     ...base,
     headline: `${inchStr(m.lengthMm)} long`,
+    business: { job: `${cap(concepts[0])}: ${inchStr(m.lengthMm)} long, about ${inchStr(m.widthMm)} wide`, materials: [], quote: '$X for this size (set by the business)' },
     answer: `${cap(concepts[0])}: ${inchStr(m.lengthMm)} long, about ${inchStr(m.widthMm)} wide, ${m.areaIn2} sq in, measured against the ${m.ruler}.`,
     numbers: [{ label: 'Length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'Range', value: `${rangeIn(m.lengthMm, pm)} (±${pmPct}%)` }, { label: 'Width', value: inchStr(m.widthMm) }, { label: 'Area', value: `${m.areaIn2} sq in` }],
     shopping: [], steps: ['Send the same shot again later to see if it changed.'],
@@ -547,6 +568,11 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
   return finish({
     task: 'surface_area', read, overlay, pipeline, measuredAgainst: rulerSpec(refKind),
     headline: `About ${fmt(m.sqft)} sq ft`,
+    business: {
+      job: `${cap(concepts[0])}: about ${fmt(m.sqft)} sq ft (${fmt(m.low)} – ${fmt(m.high)})${m.widthFt && m.lengthFt ? `, ${m.widthFt} × ${m.lengthFt} ft` : ''}`,
+      materials: seal.map((x) => `${x.qty} ${x.qty === 1 ? x.unit : `${x.unit}s`} of ${x.kind} sealer per coat`),
+      quote: `${fmt(m.sqft)} sq ft × $X per sq ft (set by the business)`,
+    },
     answer,
     numbers: [
       { label: 'Area', value: `${fmt(m.sqft)} sq ft` },
@@ -660,7 +686,7 @@ const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const rulerLabel = (k) => FLAT_REFERENCES[k]?.label || UPRIGHT[k]?.label || k;
 
 function finish(r) {
-  return { ok: true, note: null, ...r };
+  return { ok: true, note: null, business: null, ...r };
 }
 function finishErr(read, pipeline, ask, task = null, overlay = null) {
   const retry = /tap Retry/.test(ask);

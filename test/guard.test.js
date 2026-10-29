@@ -99,3 +99,20 @@ test('scrub blanks phone numbers and street addresses', () => {
   assert.equal(scrub('two-car driveway, 3 windows'), 'two-car driveway, 3 windows');
   assert.ok(redactSnapshot({ leads: [], bookings: [] }));
 });
+
+test('sample photos are listed by URL (served as static files), not inlined as base64', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { listSamples } = await import('../src/server.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'samples-'));
+  fs.writeFileSync(path.join(dir, 'driveway.jpg'), Buffer.from([0xff, 0xd8, 0xff]));
+  fs.writeFileSync(path.join(dir, 'driveway.txt'), 'Driveway\nHow big is my driveway? I need sealer.');
+  fs.writeFileSync(path.join(dir, 'notes.md'), 'ignored');
+  const list = listSamples(dir);
+  assert.deepEqual(list, [{ id: 'driveway', label: 'Driveway', text: 'How big is my driveway? I need sealer.', url: '/samples/driveway.jpg' }]);
+  assert.deepEqual(listSamples(path.join(dir, 'missing')), []);
+  const r = await (await fetch(`${base}/api/measure/samples`)).json();
+  assert.ok(Array.isArray(r));
+  assert.ok(r.every((x) => x.url && !x.dataUrl));
+});

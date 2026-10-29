@@ -198,19 +198,25 @@ app.post('/api/measure', measureLimit, async (req, res) => {
   }
 });
 
-// Sample photos for the demo chips (public/samples/*.jpg with a matching .txt message), if present.
-app.get('/api/measure/samples', (req, res) => {
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'samples');
+// Sample photos for the demo chips: public/samples/<id>.jpg (or .png/.webp) with <id>.txt beside it
+// (first line: chip label, the rest: the message sent with the photo). Only the list comes from here;
+// the photos are plain static files under /samples/, fetched when a chip is tapped.
+export const SAMPLES_DIR = path.join(__dirname, '..', 'public', 'samples');
+export function listSamples(dir = SAMPLES_DIR) {
   try {
-    const out = fs.readdirSync(dir).filter((f) => /\.(jpe?g|png)$/i.test(f)).map((f) => {
+    return fs.readdirSync(dir).filter((f) => /^[\w-]+\.(jpe?g|png|webp)$/i.test(f)).sort().map((f) => {
       const id = f.replace(/\.\w+$/, '');
       const txtFile = path.join(dir, `${id}.txt`);
-      const [label, ...rest] = (fs.existsSync(txtFile) ? fs.readFileSync(txtFile, 'utf8') : id).split('\n');
-      const mime = /png$/i.test(f) ? 'image/png' : 'image/jpeg';
-      return { id, label: label.trim(), text: rest.join('\n').trim(), dataUrl: `data:${mime};base64,${fs.readFileSync(path.join(dir, f)).toString('base64')}` };
+      const [label, ...rest] = (fs.existsSync(txtFile) ? fs.readFileSync(txtFile, 'utf8') : id).split(/\r?\n/);
+      return { id, label: label.trim(), text: rest.join('\n').trim(), url: `/samples/${encodeURIComponent(f)}` };
     });
-    res.json(out);
-  } catch { res.json([]); }
+  } catch {
+    return [];
+  }
+}
+app.get('/api/measure/samples', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.json(listSamples());
 });
 
 // ---- voicemail ----
