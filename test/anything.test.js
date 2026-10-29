@@ -144,3 +144,28 @@ test('a ± range never rounds an end onto the measured value', async () => {
   assert.equal(r, '0.54 in – 0.59 in');
   assert.equal(rangeIn(254, 254 * 0.03), '9.75 in – 10.25 in');
 });
+
+test('face measuring is off by default: a polite "not available", no SAM call', async () => {
+  delete process.env.SIGHT_FACE;
+  let samCalls = 0;
+  const r = await measureAnything({ dataUrl: 'x', text: 'Gift card on my forehead, measure my eye spacing', deps: { read: async () => ({ task: 'face', target: 'face', second_target: '', ruler: 'card', item_width_in: 0, tile_w_in: 0, tile_l_in: 0, shoe_for: 'unknown', language: 'en', summary: '' }), segment: async () => { samCalls++; return { objects: [], frame: null }; } } });
+  assert.equal(r.ok, false);
+  assert.equal(r.unavailable, 'face');
+  assert.match(r.ask, /isn’t available here/);
+  assert.equal(samCalls, 0);
+  // Without a key too (text only).
+  const t = await measureAnything({ dataUrl: 'x', text: 'measure my pupillary distance' });
+  assert.equal(t.unavailable, 'face');
+});
+
+test('the face sample is hidden from the chip list unless SIGHT_FACE=1', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const { listSamples } = await import('../src/server.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'samples-'));
+  for (const id of ['face', 'tile']) { fs.writeFileSync(path.join(dir, `${id}.jpg`), 'x'); fs.writeFileSync(path.join(dir, `${id}.txt`), `${id}\nmsg`); }
+  delete process.env.SIGHT_FACE;
+  assert.deepEqual(listSamples(dir).map((s) => s.id), ['tile']);
+  process.env.SIGHT_FACE = '1';
+  assert.deepEqual(listSamples(dir).map((s) => s.id), ['face', 'tile']);
+  delete process.env.SIGHT_FACE;
+});

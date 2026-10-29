@@ -13,7 +13,7 @@ import { business } from './business.js';
 import * as engine from './engine.js';
 import { handleMessage, addNote, getThread } from './agent.js';
 import { quoteFromPhoto, photoReply } from './photo.js';
-import { measureAnything, stepDetail, friendlyError } from './anything.js';
+import { measureAnything, stepDetail, friendlyError, faceEnabled } from './anything.js';
 import { readExif } from './distance.js';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -276,7 +276,7 @@ app.post('/api/measure', measureLimit, metaBudgetGate(8, live), async (req, res)
 export const SAMPLES_DIR = path.join(__dirname, '..', 'public', 'samples');
 export function listSamples(dir = SAMPLES_DIR) {
   try {
-    return fs.readdirSync(dir).filter((f) => /^[\w-]+\.(jpe?g|png|webp)$/i.test(f)).sort().map((f) => {
+    return fs.readdirSync(dir).filter((f) => /^[\w-]+\.(jpe?g|png|webp)$/i.test(f) && (faceEnabled() || !/^face\./i.test(f))).sort().map((f) => {
       const id = f.replace(/\.\w+$/, '');
       const txtFile = path.join(dir, `${id}.txt`);
       const [label, ...rest] = (fs.existsSync(txtFile) ? fs.readFileSync(txtFile, 'utf8') : id).split(/\r?\n/);

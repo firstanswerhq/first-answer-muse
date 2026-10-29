@@ -17,6 +17,8 @@ import { plan as tilePlan } from './tiles.js';
 import { measureFace, faceLabel, NOTE as FACE_NOTE } from './face.js';
 import { decodeMaskToSVGPath } from '@meta-sam/parser';
 
+export const faceEnabled = () => process.env.SIGHT_FACE === '1';
+export const FACE_OFF = 'Sorry, measuring faces isn’t available here. Sight measures jobs for local businesses: a tile floor, a windshield chip, a shoe size, a shed fit or a driveway. Send one of those with a quarter, a sheet of paper or a door in the shot.';
 export const TASKS = ['face', 'surface_area', 'floor_tile', 'windshield_chip', 'shoe_size', 'gap_fit', 'height', 'distance', 'size'];
 const RULERS = ['quarter', 'penny', 'nickel', 'dime', 'ca_quarter', 'ca_dime', 'ca_nickel', 'loonie', 'toonie', 'euro_1', 'euro_2', 'uk_pound', 'uk_2p', 'card', 'paper_letter', 'dollar', 'soda_can', 'license_plate', 'interior_door', 'front_door', 'double_garage_door', 'single_garage_door', 'none'];
 const UPRIGHT_CONCEPT = { interior_door: 'door', front_door: 'front door', double_garage_door: 'garage door', single_garage_door: 'garage door' };
@@ -324,6 +326,8 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline }) {
   if (read.task === 'surface_area' && !SURFACE_REFERENCES[read.ruler]) read.ruler = 'double_garage_door';
   if (read.ruler === 'none') read.ruler = DEFAULT_RULER[read.task];
 
+  // Face measuring is off unless SIGHT_FACE=1 (the code stays; the demo is about jobs for a business).
+  if (read.task === 'face' && !faceEnabled()) return { ...finishErr(read, pipeline, FACE_OFF), unavailable: 'face' };
   if (!live) return finishErr(read, pipeline, 'Measuring needs the Meta models switched on for this server.');
   if (read.task === 'face') return faceFlow({ dataUrl, live, read, pipeline, focal35 });
   if (read.task === 'surface_area') return surfaceFlow({ dataUrl, live, read, pipeline, focal35, text });

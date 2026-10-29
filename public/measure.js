@@ -10,16 +10,17 @@ const FALLBACK_ERR = "Couldn't measure that one — try again with a gift card, 
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-// Chip order: the business jobs first, Face last (it is measurement-only and carries its own note).
-// A real photo for a chip goes in public/samples/<id>.jpg with <id>.txt (label line, then the message).
+// One chip per demo business. A real photo for a chip goes in public/samples/<id>.jpg with <id>.txt
+// (label line, then the message). Face is off unless the server turns it on (SIGHT_FACE=1) and lists a
+// face sample; then it comes last.
 const SAMPLES = [
   { id: 'tile', label: 'Tile floor', text: 'How much tile do I need for this floor? There is a sheet of paper on it for scale.' },
   { id: 'windshield', label: 'Windshield chip', text: 'Repair or replace this chip? I put a quarter next to it.' },
   { id: 'shoe', label: 'Shoe size', text: 'What shoe size am I? My foot is on a sheet of paper.' },
   { id: 'shed', label: 'Shed fit', text: 'Will a 12 ft wide shed fit between my fence and the house?' },
   { id: 'driveway', label: 'Driveway', text: 'How big is my driveway? I need to know how much sealer to buy.' },
-  { id: 'face', label: 'Face', text: 'Gift card flat on my forehead. Measure my eye spacing.' },
 ];
+const FACE = { id: 'face', label: 'Face', text: 'Gift card flat on my forehead. Measure my eye spacing.' };
 
 // The waiting steps light up as the server reports each one finished (streamed), not on a timer.
 const WAIT_STEPS = [
@@ -458,11 +459,12 @@ $('compose').addEventListener('submit', (e) => {
 let serverSamples = [];
 function findSample(s) {
   const key = (v) => String(v || '').toLowerCase().replace(/[^a-z]/g, '');
-  return serverSamples.find((x) => key(x.id) === key(s.id) || key(x.label) === key(s.label) || key(x.label).startsWith(key(s.label).slice(0, 4)));
+  return serverSamples.find((x) => key(x.id) === key(s.id));
 }
 function renderChips() {
   $('samples').innerHTML = '';
-  for (const s of SAMPLES) {
+  const chips = serverSamples.some((x) => x.id === 'face') ? [...SAMPLES, FACE] : SAMPLES;
+  for (const s of chips) {
     const srv = findSample(s);
     const b = document.createElement('button');
     b.type = 'button';
