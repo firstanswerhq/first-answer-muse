@@ -9,20 +9,21 @@
 
 import { hasKey, sparkReadPhoto, samSegment } from './muse.js';
 import { measureFlat, FLAT_REFERENCES, maskBoundary } from './flat.js';
-import { best } from './measure.js';
+import { best, measureSurface, garageDoorKind, REFERENCES as SURFACE_REFERENCES } from './measure.js';
 import { calibrate, gapBetween, heightOf, distanceTo, contactPoints, fitCheck, ftIn, UPRIGHT } from './distance.js';
 import { plan as tilePlan } from './tiles.js';
 import { measureFace, faceLabel, NOTE as FACE_NOTE } from './face.js';
 import { decodeMaskToSVGPath } from '@meta-sam/parser';
 
-export const TASKS = ['face', 'floor_tile', 'windshield_chip', 'shoe_size', 'gap_fit', 'height', 'distance', 'size'];
+export const TASKS = ['face', 'surface_area', 'floor_tile', 'windshield_chip', 'shoe_size', 'gap_fit', 'height', 'distance', 'size'];
 const RULERS = ['quarter', 'penny', 'nickel', 'dime', 'ca_quarter', 'ca_dime', 'ca_nickel', 'loonie', 'toonie', 'euro_1', 'euro_2', 'uk_pound', 'uk_2p', 'card', 'paper_letter', 'dollar', 'soda_can', 'license_plate', 'interior_door', 'front_door', 'double_garage_door', 'single_garage_door', 'none'];
 const UPRIGHT_CONCEPT = { interior_door: 'door', front_door: 'front door', double_garage_door: 'garage door', single_garage_door: 'garage door' };
 
 const READ_PROMPT = `You read photos people text to First Answer to get something measured. Return JSON only.
 task: what they want —
   face (a face with a card held to the forehead: proportions, symmetry),
-  floor_tile (a floor to tile: how much tile, what cuts),
+  surface_area (a driveway, patio, concrete slab or walkway outdoors: square feet, how much sealer or coverage; a garage door or front door is the ruler),
+  floor_tile (an indoor floor to tile: how much tile, what cuts),
   windshield_chip (a chip or crack in glass: repair or replace),
   shoe_size (a foot on paper: shoe size),
   gap_fit (will something fit between two things on the ground: a shed between a fence and a house, a car in a gap),
@@ -68,6 +69,9 @@ export function coinFromText(t) {
   return ca && m[1] !== 'penny' ? `ca_${m[1]}` : m[1];
 }
 
+// Outdoor ground surfaces measured in square feet with a door as the ruler.
+const SURFACE_WORDS = /driveway|patio|concrete|slab|walkway|sidewalk|blacktop|asphalt|sealer|seal ?coat|pool deck|parking pad/;
+
 // What people type, read without the model (used when there's no key, and to back up the model).
 export function guessFromText(text = '') {
   const t = text.toLowerCase();
@@ -82,7 +86,8 @@ export function guessFromText(text = '') {
   const notFace = /face ?mask|face ?shield|face ?plate|face ?frame|eye ?bolt|thermometer|eye[- ]level|eye height|from (?:the |my )?(?:monitor|screen|face)/.test(t);
   if (!notFace && (/\b(?:my|your|her|his|their|kid'?s|son'?s|daughter'?s)\s+(?:face|eyes?|forehead|pupils?|pd|nose|mouth)\b|between (?:my |the |your |her |his )?eyes|eye (?:spacing|distance)|\bpupils?\b|pupillary|\bipd\b|p\.d\.|\bpd measurement|face symmetr|^\s*(?:measure|what(?:'s| is))\s+my\s+pd\b/.test(t)
     || /symmetr/.test(t) && /\b(?:my|your) (?:face|eyes)\b/.test(t))) task = 'face';
-  else if (/shoe|foot|feet size|what size am i/.test(t)) task = 'shoe_size';
+  else if (SURFACE_WORDS.test(t) && !/\btiles?\b|tiling/.test(t)) task = 'surface_area';
+  else if (/shoe|\bfoot\b(?! ?print)|feet size|what size am i/.test(t) && !/square (?:foot|feet)|sq\.? ?f(?:ee)?t/.test(t)) task = 'shoe_size';
   else if (/windshield|chip|crack in (?:the )?glass|repair or replace/.test(t)) task = 'windshield_chip';
   else if (/tile|floor/.test(t)) task = 'floor_tile';
   else if (/\bfit\b|between/.test(t)) task = 'gap_fit';
@@ -99,8 +104,8 @@ export function guessFromText(text = '') {
   };
 }
 
-const DEFAULT_TARGET = { floor_tile: 'floor', windshield_chip: 'chip', shoe_size: 'foot', gap_fit: 'fence', face: 'face', height: 'tree', distance: 'tree', size: 'object' };
-const DEFAULT_RULER = { floor_tile: 'paper_letter', windshield_chip: 'quarter', shoe_size: 'paper_letter', gap_fit: 'interior_door', face: 'card', height: 'interior_door', distance: 'interior_door', size: 'card' };
+const DEFAULT_TARGET = { surface_area: 'driveway', floor_tile: 'floor', windshield_chip: 'chip', shoe_size: 'foot', gap_fit: 'fence', face: 'face', height: 'tree', distance: 'tree', size: 'object' };
+const DEFAULT_RULER = { surface_area: 'double_garage_door', floor_tile: 'paper_letter', windshield_chip: 'quarter', shoe_size: 'paper_letter', gap_fit: 'interior_door', face: 'card', height: 'interior_door', distance: 'interior_door', size: 'card' };
 
 // ---------- the answers ----------
 
@@ -224,10 +229,17 @@ export async function measureAnything({ dataUrl, text = '', focal35 = null, deps
   if (guess.item_width_in) read.item_width_in = guess.item_width_in;
   if (guess.tile_w_in) { read.tile_w_in = guess.tile_w_in; read.tile_l_in = guess.tile_l_in; }
   if (guess.coin) read.ruler = guess.coin; // "it's a quarter" corrects the coin
+  // A driveway, patio or slab is square feet against a door, whatever the model filed it under.
+  if (read.task !== 'surface_area' && read.task !== 'face' && (guess.task === 'surface_area' || (read.task === 'size' && SURFACE_WORDS.test(String(read.target).toLowerCase())))) {
+    read.task = 'surface_area';
+    if (!SURFACE_WORDS.test(String(read.target).toLowerCase())) read.target = (String(text).toLowerCase().match(/driveway|patio|walkway|sidewalk|slab|pool deck|parking pad/) || ['driveway'])[0];
+  }
+  if (read.task === 'surface_area' && !SURFACE_REFERENCES[read.ruler]) read.ruler = 'double_garage_door';
   if (read.ruler === 'none') read.ruler = DEFAULT_RULER[read.task];
 
   if (!live) return finishErr(read, pipeline, 'Measuring needs the Meta models switched on for this server.');
   if (read.task === 'face') return faceFlow({ dataUrl, live, read, pipeline, focal35 });
+  if (read.task === 'surface_area') return surfaceFlow({ dataUrl, live, read, pipeline, focal35, text });
 
   // 2. Outline the target(s) and the ruler at the same time.
   const upright = Boolean(UPRIGHT_CONCEPT[read.ruler]);
@@ -423,6 +435,68 @@ async function faceFlow({ dataUrl, live, read, pipeline, focal35 }) {
     confidence: f.confidence,
     ask: f.fixes.length ? f.fixes.join(' ') : null,
     note: FACE_NOTE,
+  });
+}
+
+// Sealer coverage, from typical product labels (the label on the pail wins).
+export const SEALER = {
+  concrete: { perGallon: 200, labelRange: '150–300', unit: 'gallon' },
+  asphalt: { perPail: 300, labelRange: '250–350', unit: '5-gallon pail' },
+};
+export function sealerNeeded(sqftHigh, surface = 'unknown') {
+  const out = [];
+  if (surface !== 'asphalt') out.push({ kind: 'concrete', qty: Math.ceil(sqftHigh / SEALER.concrete.perGallon), unit: 'gallon', text: `Concrete sealer: ${Math.ceil(sqftHigh / SEALER.concrete.perGallon)} gallons per coat (at about ${SEALER.concrete.perGallon} sq ft per gallon; labels say ${SEALER.concrete.labelRange})` });
+  if (surface !== 'concrete') out.push({ kind: 'asphalt', qty: Math.ceil(sqftHigh / SEALER.asphalt.perPail), unit: '5-gallon pail', text: `Asphalt sealer: ${Math.ceil(sqftHigh / SEALER.asphalt.perPail)} five-gallon pails per coat (at about ${SEALER.asphalt.perPail} sq ft per pail; labels say ${SEALER.asphalt.labelRange})` });
+  return out;
+}
+
+// Driveway, patio, slab: SAM outlines the surface and the door; measure.js adds up real square feet
+// row by row using the door's height as the ruler and the surface's edges for the horizon.
+async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text }) {
+  const front = read.ruler === 'front_door';
+  const concepts = [read.target || 'driveway', front ? 'front door' : 'garage door'];
+  let segs;
+  try {
+    segs = await Promise.all(concepts.map((c) => live.segment(dataUrl, c)));
+  } catch (e) {
+    pipeline.push({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
+    return finishErr(read, pipeline, 'Couldn’t outline the photo just now; please send it again.');
+  }
+  const [sSeg, dSeg] = segs;
+  const frame = sSeg.frame || dSeg.frame;
+  const surface = best(sSeg.objects), door = best(dSeg.objects);
+  pipeline.push({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: { [concepts[0]]: sSeg.objects.length, [concepts[1]]: dSeg.objects.length } });
+  const refKind = front ? 'front_door' : door ? garageDoorKind(door.box) : 'double_garage_door';
+  const R = SURFACE_REFERENCES[refKind];
+  const overlay = { frame, outlines: [outlineOf(surface, concepts[0], 'target'), outlineOf(door, R.label, 'ruler')].filter(Boolean), lines: [] };
+  if (!surface) return finishErr(read, pipeline, `I couldn’t find the ${concepts[0]} in that photo. Stand at the street end so all of it is in the shot.`, null, overlay);
+  if (!door) return finishErr(read, pipeline, `I need the ${front ? 'front door' : 'garage door'} in the shot as the ruler. Stand at the street end of the ${concepts[0]} so the ${front ? 'door' : 'garage door'} is at the far end, and send one more.`, null, overlay);
+  if (!frame) return finishErr(read, pipeline, 'Couldn’t read the photo size; please send it again.', null, overlay);
+  const hfovDeg = focal35 && focal35 > 8 && focal35 < 300 ? (2 * Math.atan(18 / focal35) * 180) / Math.PI : 69;
+  const m = measureSurface({ surface, ref: door, refKind, frame, hfovDeg });
+  pipeline.push({ model: 'first-answer math', step: `square feet against the ${R.label}`, result: { sqft: m.sqft, low: m.low, high: m.high, method: m.method, confidence: m.confidence, cameraHeightFt: m.cameraHeightFt } });
+  if (!m.ok) return finishErr(read, pipeline, `I couldn’t measure the ${concepts[0]} from that angle. Stand at the street end, straight on, with the whole ${concepts[0]} and the ${front ? 'door' : 'garage door'} in the shot.`, null, overlay);
+  const t = String(text).toLowerCase();
+  const kind = /asphalt|blacktop/.test(t) ? 'asphalt' : /concrete|slab|cement/.test(t) ? 'concrete' : 'unknown';
+  const seal = sealerNeeded(m.high, kind);
+  const fmt = (n) => n.toLocaleString('en-US');
+  const sizeWords = m.widthFt && m.lengthFt ? ` (about ${m.widthFt} ft wide by ${m.lengthFt} ft long)` : '';
+  const answer = `Your ${concepts[0]} is about ${fmt(m.sqft)} sq ft${sizeWords}, between ${fmt(m.low)} and ${fmt(m.high)} sq ft, measured against the ${R.label}. ${seal.length === 1 ? `Buy ${seal[0].qty} ${seal[0].qty === 1 ? seal[0].unit : `${seal[0].unit}s`} of ${seal[0].kind} sealer per coat.` : `That’s ${seal[0].qty} gallons of concrete sealer or ${seal[1].qty} five-gallon pails of asphalt sealer per coat.`}`;
+  return finish({
+    task: 'surface_area', read, overlay, pipeline,
+    headline: `About ${fmt(m.sqft)} sq ft`,
+    answer,
+    numbers: [
+      { label: 'Area', value: `${fmt(m.sqft)} sq ft` },
+      { label: 'Range', value: `${fmt(m.low)} – ${fmt(m.high)} sq ft` },
+      ...(m.widthFt && m.lengthFt ? [{ label: 'Size', value: `${m.widthFt} × ${m.lengthFt} ft` }] : []),
+      ...seal.map((x) => ({ label: x.kind === 'concrete' ? 'Concrete sealer' : 'Asphalt sealer', value: `${x.qty} ${x.qty === 1 ? x.unit : `${x.unit}s`} per coat` })),
+    ],
+    shopping: [...seal.map((x) => x.text), 'Buy for the high end of the range; return unopened extras'],
+    steps: ['Clean it first: pressure wash and let it dry 24 hours.', 'Check the forecast: no rain for 24–48 hours, above 50°F.', 'Two thin coats beat one thick one; the second coat needs the same amount again.'],
+    confidence: m.confidence,
+    ask: m.confidence === 'low' ? `Rough number: for a tighter one, stand at the street end, straight on, phone at chest height, with the whole ${concepts[0]} and the ${front ? 'door' : 'garage door'} in the shot.` : (m.clipped ? `Part of the ${concepts[0]} runs out of the photo; the edges were carried on, so check that end with a tape.` : null),
+    surface: { sqft: m.sqft, low: m.low, high: m.high, widthFt: m.widthFt, lengthFt: m.lengthFt, kind },
   });
 }
 
