@@ -124,7 +124,10 @@ test('Spanish question, Spanish answer: numbers and units still checked against 
   assert.match(system, /Write the message in Spanish/);
   assert.equal(r.wording, 'spark');
   assert.equal(r.language, 'es');
-  assert.ok(r.answer.startsWith(r.verdictSentence));
+  // Our verdict sentence, in Spanish, then Spark's next step; the whole card is in Spanish.
+  assert.match(r.answer, /^Ese impacto mide 0\.\d+ pulg\.: más pequeño que una moneda de un cuarto de dólar, así que normalmente se puede reparar/);
+  assert.equal(r.lang, 'es');
+  assert.equal(r.headline, 'Se puede reparar');
   assert.match(r.answer, /Ponle cinta transparente y llévalo pronto al taller\.$/);
   assert.match(stepDetail(r.pipeline.find((p) => /word the answer/.test(p.step))), /used \(Spanish\)/);
   // A Spanish reply that flips the verdict or changes a number keeps the (English) template.

@@ -161,3 +161,10 @@ test('the owner sees the photo with SAM’s masks and Spark’s verdict; the pub
   assert.equal(own.leads[0].photo, thumb);
   assert.deepEqual(own.leads[0].sight.spark.seen, [{ color: 'MAGENTA', seen: 'driveway' }, { color: 'ORANGE', seen: 'garage door' }]);
 });
+
+test('a Spanish question gets the hand-off confirmation in Spanish', async () => {
+  engine.reset();
+  const h = rememberHandoff(DRIVE);
+  const r = await (await send({ id: h.id, phone: '615-555-0199', lang: 'es' })).json();
+  assert.match(r.message, /^Enviado a Brightside Exterior Care\. Ya está en el tablero de Dana y te escribirán al •••-•••-0199\.$/);
+});

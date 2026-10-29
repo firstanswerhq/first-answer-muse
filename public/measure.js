@@ -128,7 +128,7 @@ function working(dataUrl) {
 }
 
 // ---------- annotated photo ----------
-function annotatedShot(dataUrl, overlay) {
+function annotatedShot(dataUrl, overlay, T = UI.en) {
   const wrap = document.createElement('div');
   wrap.className = 'shot';
   const img = new Image();
@@ -180,7 +180,7 @@ function annotatedShot(dataUrl, overlay) {
     const label = o.label || (isRuler ? 'reference' : 'target');
     const conf = o.conf != null ? ` · ${Number(o.conf).toFixed(2)}` : '';
     // Rulers are small and often sit inside a target: tag them under the box.
-    if (isRuler) pin('ruler below', `ruler: ${label}${conf}`, b.x1, Math.min(b.y2, frame.h * 0.92));
+    if (isRuler) pin('ruler below', `${T.ruler}: ${label}${conf}`, b.x1, Math.min(b.y2, frame.h * 0.92));
     else pin('target', `${label}${conf}`, b.x1, b.y1);
   });
 
@@ -240,9 +240,28 @@ function shotKey(r) {
 
 // ---------- words on the card (English; Spanish for Spanish questions) ----------
 const UI = {
-  en: { ruler: 'ruler', agreed: 'Muse Spark checked these outlines and agrees', disagreed: 'Muse Spark checked these outlines and disagreed, so nothing was measured', skipped: 'Muse Spark’s check didn’t come back in time, so this was measured without it', corrected: 'Muse Spark disagreed with SAM’s first outline, told SAM what to look for, and agrees with the new one (re-measured)', correctedBad: 'Muse Spark corrected SAM once and still disagreed, so nothing was measured' },
+  en: {
+    ruler: 'ruler', agreed: 'Muse Spark checked these outlines and agrees', disagreed: 'Muse Spark checked these outlines and disagreed, so nothing was measured', skipped: 'Muse Spark’s check didn’t come back in time, so this was measured without it', corrected: 'Muse Spark disagreed with SAM’s first outline, told SAM what to look for, and agrees with the new one (re-measured)', correctedBad: 'Muse Spark corrected SAM once and still disagreed, so nothing was measured',
+    retake: 'Retake needed', notYet: 'Not measured yet', tip: 'Tip', against: 'Measured against:', buy: 'What to buy', steps: 'Steps',
+    sparkWords: 'Spark wording', checkedNums: 'numbers from geometry, checked', geomNums: 'Numbers from geometry',
+    forBiz: (to) => `For ${to}`, wouldGet: 'What the business would get', job: 'Job size', mats: 'Materials', quote: 'Quote',
+    priced: (to) => `Demo price from ${to}’s own price list (a demo business).`, unpriced: (to) => `Not on ${to}’s price list, so the owner prices it.`, never: 'First Answer never makes prices up.', ownerEnglish: '',
+    phone: 'Your phone (optional)', phoneLabel: 'Your phone number, optional, so they can text you back', send: (to) => `Send this to ${to}`, sending: 'Sending…', seeBoard: (o) => `See ${o}’s board`, sendFail: 'Couldn’t send it just now. Try again in a moment.',
+    panel: 'How Meta’s models measured it', fixed: ['corrected SAM’s outline →', 'outlined it again → re-measured'],
+    conf: { good: 'Measured', fair: 'Close estimate', low: 'Rough — see tip' },
+  },
+  es: {
+    ruler: 'referencia', agreed: 'Muse Spark revisó estos contornos y está de acuerdo', disagreed: 'Muse Spark revisó estos contornos y no estuvo de acuerdo, así que no se midió nada', skipped: 'La revisión de Muse Spark no llegó a tiempo, así que se midió sin ella', corrected: 'Muse Spark no estuvo de acuerdo con el primer contorno de SAM, le dijo qué buscar y está de acuerdo con el nuevo (medido otra vez)', correctedBad: 'Muse Spark corrigió a SAM una vez y siguió sin estar de acuerdo, así que no se midió nada',
+    retake: 'Hay que tomar otra foto', notYet: 'Todavía sin medir', tip: 'Consejo', against: 'Referencia:', buy: 'Qué comprar', steps: 'Pasos',
+    sparkWords: 'Redacción de Spark', checkedNums: 'números de la geometría, revisados', geomNums: 'Números de la geometría',
+    forBiz: (to) => `Para ${to}`, wouldGet: 'Lo que recibiría el negocio', job: 'Trabajo', mats: 'Materiales', quote: 'Cotización',
+    priced: (to) => `Precio de demostración de la lista de ${to} (un negocio de demostración).`, unpriced: (to) => `No está en la lista de precios de ${to}; el dueño le pone precio.`, never: 'First Answer nunca inventa precios.', ownerEnglish: 'El negocio lo recibe en inglés.',
+    phone: 'Tu teléfono (opcional)', phoneLabel: 'Tu número de teléfono, opcional, para que te escriban', send: (to) => `Enviar a ${to}`, sending: 'Enviando…', seeBoard: (o) => `Ver el tablero de ${o}`, sendFail: 'No se pudo enviar. Inténtalo de nuevo en un momento.',
+    panel: 'Cómo lo midieron los modelos de Meta', fixed: ['corrigió el contorno de SAM →', 'lo marcó otra vez → medido de nuevo'],
+    conf: { good: 'Medido', fair: 'Estimado cercano', low: 'Aproximado: ve el consejo' },
+  },
 };
-const L = (r) => UI[r?.language === 'es' && UI.es ? 'es' : 'en'];
+const L = (r) => UI[r?.lang === 'es' ? 'es' : 'en'];
 
 // ---------- reply ----------
 function list(items, ordered) {
@@ -254,49 +273,51 @@ function renderReply(r, dataUrl) {
   const el = bubble('them', '', 'reply');
   const hasOverlay = r.overlay?.frame && ((r.overlay.outlines || []).length || (r.overlay.lines || []).length);
   if (hasOverlay) {
-    el.appendChild(annotatedShot(dataUrl, r.overlay));
+    el.appendChild(annotatedShot(dataUrl, r.overlay, L(r)));
     const key = shotKey(r);
     if (key) el.appendChild(key);
   }
 
   const body = document.createElement('div');
   body.className = 'r-body';
-  const conf = CONF[r.confidence];
+  const T = L(r);
+  const conf = CONF[r.confidence] && [CONF[r.confidence][0], T.conf[r.confidence]];
   const nums = (r.numbers || []).filter((n) => n && (n.label || n.value != null));
   const shopping = (r.shopping || []).filter(Boolean);
   const steps = (r.steps || []).filter(Boolean);
   let html = '';
   if (r.ok === false) {
     // Not measured, but SAM's outlines are shown so the customer can see what went wrong.
-    html += `<div class="r-top"><h3 class="r-head r-none">${r.refused ? 'Retake needed' : 'Not measured yet'}</h3></div><div class="r-tip"><b>Tip</b><span>${esc(r.ask || FALLBACK_ERR)}</span></div>`;
+    html += `<div class="r-top"><h3 class="r-head r-none">${r.refused ? T.retake : T.notYet}</h3></div><div class="r-tip"><b>${T.tip}</b><span>${esc(r.ask || FALLBACK_ERR)}</span></div>`;
   } else if (r.headline || conf) {
     html += `<div class="r-top">${r.headline ? `<h3 class="r-head">${esc(r.headline)}</h3>` : '<span></span>'}${conf ? `<span class="conf ${conf[0]}">${conf[1]}</span>` : ''}</div>`;
   }
   if (r.answer && r.ok !== false) {
     html += `<p class="r-answer"${r.language === 'es' ? ' lang="es"' : ''}>${esc(r.answer).replace(/\n/g, '<br>')}</p>`;
-    html += `<p class="r-src">${r.wording === 'spark' ? `<span class="mtag spark">Spark wording${r.language === 'es' ? ' · en español' : ''}</span> · numbers from geometry, checked` : '<span class="mtag math">Numbers from geometry</span>'}</p>`;
+    // "en español" only when the server found Spark's text really is Spanish.
+    html += `<p class="r-src">${r.wording === 'spark' ? `<span class="mtag spark">${T.sparkWords}${r.language === 'es' ? ' · en español' : ''}</span> · ${T.checkedNums}` : `<span class="mtag math">${T.geomNums}</span>`}</p>`;
   }
-  if (r.measuredAgainst && r.ok !== false) html += `<p class="r-against"><span>Measured against:</span> ${esc(r.measuredAgainst)}</p>`;
+  if (r.measuredAgainst && r.ok !== false) html += `<p class="r-against"><span>${T.against}</span> ${esc(r.measuredAgainst)}</p>`;
   if (nums.length) html += `<div class="r-nums">${nums.map((n) => `<div class="r-num"><span>${esc(n.label)}</span><b>${esc(n.value)}</b></div>`).join('')}</div>`;
-  if (shopping.length) html += `<div class="r-sec"><h4>What to buy</h4>${list(shopping, false)}</div>`;
-  if (steps.length) html += `<div class="r-sec"><h4>Steps</h4>${list(steps, true)}</div>`;
-  if (r.ask && r.ok !== false) html += `<div class="r-tip"><b>Tip</b><span>${esc(r.ask)}</span></div>`;
+  if (shopping.length) html += `<div class="r-sec"><h4>${T.buy}</h4>${list(shopping, false)}</div>`;
+  if (steps.length) html += `<div class="r-sec"><h4>${T.steps}</h4>${list(steps, true)}</div>`;
+  if (r.ask && r.ok !== false) html += `<div class="r-tip"><b>${T.tip}</b><span>${esc(r.ask)}</span></div>`;
   if (r.note) html += `<p class="r-note">${esc(r.note)}</p>`;
   const biz = r.business;
   if (biz && biz.job) {
     const mats = (biz.materials || []).filter(Boolean);
     const to = r.handoff?.to || 'the business';
-    html += `<div class="r-biz"><h4>${r.handoff ? `For ${esc(to)}` : 'What the business would get'}</h4><dl>
-      <div><dt>Job size</dt><dd>${esc(biz.job)}</dd></div>
-      ${mats.length ? `<div><dt>Materials</dt><dd>${mats.map(esc).join('<br>')}</dd></div>` : ''}
-      <div><dt>Quote</dt><dd>${esc(biz.quote)}</dd></div>
-    </dl><p>${biz.priced ? `Demo price from ${esc(to)}’s own price list (a demo business).` : `Not on ${esc(to)}’s price list, so the owner prices it.`} First Answer never makes prices up.</p>
-    ${r.handoff ? `<form class="r-send"><input type="tel" inputmode="tel" autocomplete="tel" placeholder="Your phone (optional)" aria-label="Your phone number, optional, so they can text you back"><button type="submit">Send this to ${esc(to)}</button></form><p class="r-sent" role="status" hidden></p>` : ''}</div>`;
+    html += `<div class="r-biz"><h4>${r.handoff ? esc(T.forBiz(to)) : T.wouldGet}</h4><dl>
+      <div><dt>${T.job}</dt><dd lang="en">${esc(biz.job)}</dd></div>
+      ${mats.length ? `<div><dt>${T.mats}</dt><dd lang="en">${mats.map(esc).join('<br>')}</dd></div>` : ''}
+      <div><dt>${T.quote}</dt><dd lang="en">${esc(biz.quote)}</dd></div>
+    </dl><p>${esc(biz.priced ? T.priced(to) : T.unpriced(to))} ${T.never}${T.ownerEnglish ? ` ${T.ownerEnglish}` : ''}</p>
+    ${r.handoff ? `<form class="r-send"><input type="tel" inputmode="tel" autocomplete="tel" placeholder="${esc(T.phone)}" aria-label="${esc(T.phoneLabel)}"><button type="submit">${esc(T.send(to))}</button></form><p class="r-sent" role="status" hidden></p>` : ''}</div>`;
   }
   body.innerHTML = html || `<p class="r-answer">${esc(FALLBACK_ERR)}</p>`;
   el.appendChild(body);
   const sendForm = body.querySelector('.r-send');
-  if (sendForm) sendForm.addEventListener('submit', (e) => { e.preventDefault(); sendToBusiness(r.handoff, sendForm, body.querySelector('.r-sent')); });
+  if (sendForm) sendForm.addEventListener('submit', (e) => { e.preventDefault(); sendToBusiness(r.handoff, sendForm, body.querySelector('.r-sent'), r.lang); });
 
   const pipe = (r.pipeline || []).filter((p) => p && p.step);
   if (pipe.length) {
@@ -304,7 +325,7 @@ function renderReply(r, dataUrl) {
     sec.className = 'r-pipe';
     const secs = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
     const total = pipe.reduce((t, p) => t + (p.ms || 0), 0);
-    sec.innerHTML = `<h4>How Meta's models measured it${total ? ` <small>${secs(total)}</small>` : ''}</h4>${r.corrected && r.ok !== false ? `<p class="r-fixed"><span class="mtag spark">Muse Spark</span> corrected SAM’s outline → <span class="mtag sam">SAM 3.1</span> outlined it again → re-measured</p>` : ''}<ol>${pipe.map((p) => {
+    sec.innerHTML = `<h4>${T.panel}${total ? ` <small>${secs(total)}</small>` : ''}</h4>${r.corrected && r.ok !== false ? `<p class="r-fixed"><span class="mtag spark">Muse Spark</span> ${T.fixed[0]} <span class="mtag sam">SAM 3.1</span> ${T.fixed[1]}</p>` : ''}<ol>${pipe.map((p) => {
       const [k, name] = modelInfo(p.model);
       return `<li class="${p.failed ? 'failed' : ''}"><span class="mtag ${k}">${esc(name)}</span><span class="what">${esc(p.step || '')}${p.detail ? ` <em>· ${esc(p.detail)}</em>` : ''}</span><span class="ms">${esc(secs(p.ms))}</span></li>`;
     }).join('')}</ol>`;
@@ -338,26 +359,27 @@ function renderReply(r, dataUrl) {
 
 // ---------- the hand-off to the business ----------
 // Posts only the answer's id (and the optional phone); the server makes the lead from what it measured.
-async function sendToBusiness(handoff, form, out) {
+async function sendToBusiness(handoff, form, out, lang) {
+  const T = UI[lang === 'es' ? 'es' : 'en'];
   const btn = form.querySelector('button');
   const phone = form.querySelector('input').value.trim();
   btn.disabled = true;
-  btn.textContent = 'Sending…';
+  btn.textContent = T.sending;
   let r = null;
   try {
-    const res = await fetch('/api/measure/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: handoff.id, phone }) });
+    const res = await fetch('/api/measure/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: handoff.id, phone, lang }) });
     r = await res.json().catch(() => null);
   } catch {}
   out.hidden = false;
   if (r?.ok) {
     form.remove();
     out.className = 'r-sent ok';
-    out.innerHTML = `${esc(r.message)} <a href="${esc(r.board || '/owner.html')}" target="_blank" rel="noopener">See ${esc(r.owner || 'the owner')}’s board</a>`;
+    out.innerHTML = `${esc(r.message)} <a href="${esc(r.board || '/owner.html')}" target="_blank" rel="noopener">${esc(T.seeBoard(r.owner || 'the owner'))}</a>`;
   } else {
     btn.disabled = false;
-    btn.textContent = `Send this to ${handoff.to}`;
+    btn.textContent = T.send(handoff.to);
     out.className = 'r-sent bad';
-    out.textContent = r?.ask || r?.error || 'Couldn’t send it just now. Try again in a moment.';
+    out.textContent = r?.ask || r?.error || T.sendFail;
   }
 }
 

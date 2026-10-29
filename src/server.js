@@ -222,14 +222,15 @@ export function phoneDigits(phone) {
 }
 
 app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
-  const { id, phone } = req.body || {};
+  const { id, phone, lang } = req.body || {};
+  const esp = lang === 'es';
   const h = typeof id === 'string' ? handoffs.get(id) : null;
-  if (!h || Date.now() - h.at > HANDOFF_TTL_MS) return res.status(404).json({ ok: false, ask: 'That answer has expired. Send the photo again and tap Send.' });
+  if (!h || Date.now() - h.at > HANDOFF_TTL_MS) return res.status(404).json({ ok: false, ask: esp ? 'Esa respuesta ya venció. Manda la foto otra vez y toca Enviar.' : 'That answer has expired. Send the photo again and tap Send.' });
   const p = phoneDigits(phone);
-  if (!p.ok) return res.status(400).json({ ok: false, ask: 'That phone number doesn’t look right. Leave it blank or type all 10 digits.' });
+  if (!p.ok) return res.status(400).json({ ok: false, ask: esp ? 'Ese número no se ve bien. Déjalo en blanco o escribe los 10 dígitos.' : 'That phone number doesn’t look right. Leave it blank or type all 10 digits.' });
   const digits = p.digits;
   // The phone number is set once; after that it is locked (so a sent lead can't be pointed at someone else).
-  if (h.leadId && digits && h.phoneSet) return res.status(409).json({ ok: false, ask: 'This job is already on the board with a phone number. Call the business to change it.' });
+  if (h.leadId && digits && h.phoneSet) return res.status(409).json({ ok: false, ask: esp ? 'Este trabajo ya está en el tablero con un teléfono. Llama al negocio para cambiarlo.' : 'This job is already on the board with a phone number. Call the business to change it.' });
   if (!h.leadId) {
     const lead = engine.addLead({ channel: 'sight', phone: digits || null, summary: `Sight photo: ${h.headline}`, quote: h.priced ? { serviceName: h.priced.serviceName, detail: h.priced.detail, total: h.priced.total } : null });
     engine.updateLead(lead.id, { business: h.biz, photo: h.thumb, sight: { task: h.task, headline: h.headline, job: h.block.job, materials: h.block.materials || [], quote: h.block.quote, measuredAgainst: h.measuredAgainst, confidence: h.confidence, priced: h.block.priced, checked: h.checked, spark: h.spark, hasPhoto: Boolean(h.thumb) } });
@@ -249,7 +250,9 @@ app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
     owner: h.biz.owner,
     business: h.biz.id,
     board: `/owner.html?b=${encodeURIComponent(h.biz.id)}`,
-    message: `Sent to ${h.biz.name}. It’s on ${h.biz.owner}’s board now${masked ? `, and they’ll text you at ${masked}` : '; add your number if you want them to text you back'}.`,
+    message: esp
+      ? `Enviado a ${h.biz.name}. Ya está en el tablero de ${h.biz.owner}${masked ? ` y te escribirán al ${masked}` : '; agrega tu número si quieres que te escriban'}.`
+      : `Sent to ${h.biz.name}. It’s on ${h.biz.owner}’s board now${masked ? `, and they’ll text you at ${masked}` : '; add your number if you want them to text you back'}.`,
   });
 }));
 

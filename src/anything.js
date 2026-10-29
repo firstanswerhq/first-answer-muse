@@ -16,6 +16,7 @@ import { calibrate, gapBetween, heightOf, distanceTo, contactPoints, fitCheck, f
 import { plan as tilePlan } from './tiles.js';
 import { measureFace, faceLabel, NOTE as FACE_NOTE } from './face.js';
 import { decodeMaskToSVGPath } from '@meta-sam/parser';
+import { es, detectLanguage, localizeResult } from './es.js';
 
 export const faceEnabled = () => process.env.SIGHT_FACE === '1';
 export const FACE_OFF = 'Sorry, measuring faces isn’t available here. Sight measures jobs for local businesses: a tile floor, a windshield chip, a shoe size, a shed fit or a driveway. Send one of those with a quarter, a sheet of paper or a door in the shot.';
@@ -275,7 +276,13 @@ function samResult(concepts, segs) {
  *                       word?(system, facts) -> text, check?(images, prompt, schema) -> json }
  *   onStep(step): called as each step finishes (for live progress on the page).
  */
-export async function measureAnything({ dataUrl, text = '', focal35 = null, deps = null, onStep = null, wordTimeoutMs = WORD_TIMEOUT_MS, checkTimeoutMs = CHECK_TIMEOUT_MS }) {
+export async function measureAnything(opts) {
+  const r = await measureAll(opts);
+  // A Spanish question gets the whole card in Spanish (our template strings, translated statically).
+  return r?.read?.language === 'es' ? localizeResult(r) : { ...r, lang: 'en' };
+}
+
+async function measureAll({ dataUrl, text = '', focal35 = null, deps = null, onStep = null, wordTimeoutMs = WORD_TIMEOUT_MS, checkTimeoutMs = CHECK_TIMEOUT_MS }) {
   const pipeline = makePipeline(onStep);
   const live = deps || (hasKey() ? {
     read: (d, p, s) => sparkReadPhoto({ dataUrl: d, prompt: p, schema: s }),
@@ -500,7 +507,7 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
       shoe: { pick: s.pick, men: s.men, women: s.women, eu: s.eu },
       answer: `Your foot is ${inchStr(m.lengthMm)} long (${(m.lengthMm / 10).toFixed(1)} cm). That’s a US ${s.pick}, about EU ${s.eu}.`,
       numbers: [{ label: 'Foot length', value: `${inchStr(m.lengthMm)} · ${(m.lengthMm / 10).toFixed(1)} cm` }, { label: 'Range', value: `${rangeIn(m.lengthMm, pm)} (±${pmPct}%)` }, { label: 'US men’s', value: String(s.men) }, { label: 'US women’s', value: String(s.women) }, { label: 'EU', value: String(s.eu) }],
-      shopping: [], steps: ['Measure both feet and go by the bigger one.', 'Feet swell a little by evening; measure then if you can.', 'Between sizes, go half a size up.'],
+      shopping: [], steps: ['Measure both feet and go by the bigger one.', 'Feet swell a little by evening; measure then if you can.', 'Between sizes, go half a size up.', 'Brands vary: some, like Nike, often run small, so try a half to a full size up.'],
       confidence: m.confidence, ask: m.notes.length ? m.notes.join('; ') : null,
     });
   }
@@ -898,13 +905,17 @@ async function wordAnswer(r, live, pipeline, timeoutMs = WORD_TIMEOUT_MS) {
       live.word(WORD_PROMPT + (r.verdictSentence ? WORD_PROMPT_LOCKED : '') + (lang === 'es' ? WORD_PROMPT_ES : ''), JSON.stringify(facts)),
       new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no reply in ${timeoutMs / 1000} s`)), timeoutMs); }),
     ]);
-    const check = checkWording(text, facts, r.headline, { task: r.task });
+    let check = checkWording(text, facts, r.headline, { task: r.task });
+    // The "en español" label must be true: Spark's text has to be in the language we asked for.
+    const wrote = detectLanguage(text);
+    if (check.ok && wrote !== lang) check = { ok: false, reason: `written in ${wrote === 'es' ? 'Spanish' : 'English'}, not ${lang === 'es' ? 'Spanish' : 'English'}` };
     if (check.ok) {
-      // The verdict sentence is ours, always first; Spark's text follows it.
-      r.answer = r.verdictSentence ? `${r.verdictSentence} ${String(text).trim()}` : String(text).trim();
+      // The verdict sentence is ours, always first (in the customer's language); Spark's text follows it.
+      const verdict = r.verdictSentence && (lang === 'es' ? es(r.verdictSentence) : r.verdictSentence);
+      r.answer = verdict ? `${verdict} ${String(text).trim()}` : String(text).trim();
       r.wording = 'spark';
-      r.language = lang;
-      pipeline.add({ ...step, ms: ms(), result: { used: true, numbersChecked: numbersIn(text).length, language: lang } });
+      r.language = wrote;
+      pipeline.add({ ...step, ms: ms(), result: { used: true, numbersChecked: numbersIn(text).length, language: wrote } });
     } else {
       pipeline.add({ ...step, ms: ms(), result: { used: false, fellBack: check.reason } });
     }

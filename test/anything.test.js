@@ -169,3 +169,14 @@ test('the face sample is hidden from the chip list unless SIGHT_FACE=1', async (
   assert.deepEqual(listSamples(dir).map((s) => s.id), ['face', 'tile']);
   delete process.env.SIGHT_FACE;
 });
+
+test('shoe size: an 11 in foot is US 11 men’s by the chart, and the steps say some brands run small', async () => {
+  const s = shoeSize(11 * 25.4, 'men');
+  assert.equal(s.men, 11);
+  const cam = camera({ tiltDeg: 15, D: 900, f: 1100 });
+  const paper = rectShape(0, 0, 279.4, 215.9, 90), foot = ellipseShape(0, 0, 50, 139.7); // 11 in foot
+  const r = await measureAnything({ dataUrl: 'x', text: 'what shoe size am I? (men)', deps: deps(R({ task: 'shoe_size', target: 'foot', ruler: 'paper_letter', shoe_for: 'men' }), { foot: samSeg(cam, foot.inside, foot.boundary), 'sheet of paper': samSeg(cam, paper.inside, paper.boundary) }) });
+  assert.equal(r.ok, true, r.ask);
+  assert.match(r.headline, /^Size 1[01](\.5)? men’s$/);
+  assert.ok(r.steps.includes('Brands vary: some, like Nike, often run small, so try a half to a full size up.'));
+});
