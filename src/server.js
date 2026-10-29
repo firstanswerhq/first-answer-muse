@@ -188,30 +188,48 @@ export function measureErrorMessage(e) {
 // "Send this to <business>" button posts only that id (and an optional phone number), so what lands
 // on the owner board is exactly what Sight measured, never text typed into the request.
 const HANDOFF_TTL_MS = 2 * 60 * 60 * 1000;
-const handoffs = new Map(); // id -> { r, at, leadId }
+const HANDOFF_MAX = 5000; // with 20 photos per 10 minutes per IP, plenty; only expired answers are dropped first
+const handoffs = new Map(); // id -> { at, leadId, ... } in the order they were made
 export function rememberHandoff(r, now = Date.now()) {
   if (!r?.ok || !r.business?.job) return null;
-  for (const [k, v] of handoffs) if (now - v.at > HANDOFF_TTL_MS || handoffs.size > 500) handoffs.delete(k); else break;
+  for (const [k, v] of handoffs) { if (now - v.at > HANDOFF_TTL_MS) handoffs.delete(k); else break; }
+  while (handoffs.size >= HANDOFF_MAX) handoffs.delete(handoffs.keys().next().value);
   const id = crypto.randomBytes(12).toString('base64url');
   const priced = r.task === 'surface_area' && r.surface ? engine.sightQuote({ task: r.task, sqft: r.surface.sqft }) : engine.sightQuote({ task: r.task });
   const block = { ...r.business, quote: priced ? priced.line : r.business.quote, priced: Boolean(priced) };
-  handoffs.set(id, { at: now, leadId: null, task: r.task, headline: r.headline, measuredAgainst: r.measuredAgainst || null, confidence: r.confidence || null, block, priced });
+  // checked: 'agreed' when Muse Spark confirmed SAM's outlines; 'skipped' when its check didn't come back.
+  handoffs.set(id, { at: now, leadId: null, phoneSet: false, task: r.task, headline: r.headline, measuredAgainst: r.measuredAgainst || null, confidence: r.confidence || null, checked: r.checked || 'skipped', block, priced });
   return { id, to: business.name, owner: business.owner, block };
+}
+
+// A US phone number: 10 digits, or 11 starting with 1. Anything else (arrays, objects, 7 or 15 digits) is refused.
+export function phoneDigits(phone) {
+  if (phone == null || phone === '') return { ok: true, digits: '' };
+  if (typeof phone !== 'string' || phone.length > 30) return { ok: false };
+  const d = phone.replace(/\D/g, '');
+  if (d.length === 10) return { ok: true, digits: d };
+  if (d.length === 11 && d[0] === '1') return { ok: true, digits: d.slice(1) };
+  return { ok: false };
 }
 
 app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
   const { id, phone } = req.body || {};
   const h = typeof id === 'string' ? handoffs.get(id) : null;
   if (!h || Date.now() - h.at > HANDOFF_TTL_MS) return res.status(404).json({ ok: false, ask: 'That answer has expired. Send the photo again and tap Send.' });
-  const digits = String(phone || '').replace(/\D/g, '');
-  if (phone && (digits.length < 10 || digits.length > 15)) return res.status(400).json({ ok: false, ask: 'That phone number doesn’t look right. Leave it blank or type all 10 digits.' });
+  const p = phoneDigits(phone);
+  if (!p.ok) return res.status(400).json({ ok: false, ask: 'That phone number doesn’t look right. Leave it blank or type all 10 digits.' });
+  const digits = p.digits;
+  // The phone number is set once; after that it is locked (so a sent lead can't be pointed at someone else).
+  if (h.leadId && digits && h.phoneSet) return res.status(409).json({ ok: false, ask: 'This job is already on the board with a phone number. Call the business to change it.' });
   if (!h.leadId) {
     const lead = engine.addLead({ channel: 'sight', phone: digits || null, summary: `Sight photo: ${h.headline}`, quote: h.priced ? { serviceName: h.priced.serviceName, detail: h.priced.detail, total: h.priced.total } : null });
-    engine.updateLead(lead.id, { sight: { task: h.task, job: h.block.job, materials: h.block.materials || [], quote: h.block.quote, measuredAgainst: h.measuredAgainst, confidence: h.confidence, priced: h.block.priced } });
+    engine.updateLead(lead.id, { sight: { task: h.task, job: h.block.job, materials: h.block.materials || [], quote: h.block.quote, measuredAgainst: h.measuredAgainst, confidence: h.confidence, priced: h.block.priced, checked: h.checked } });
     h.leadId = lead.id;
+    h.phoneSet = Boolean(digits);
     broadcast('lead', lead);
   } else if (digits) {
     engine.updateLead(h.leadId, { phone: digits });
+    h.phoneSet = true;
     broadcast('lead', { leadId: h.leadId });
   }
   const masked = digits ? `•••-•••-${digits.slice(-4)}` : null;

@@ -133,7 +133,7 @@ export function redactLead(l) {
     summary: l.channel === 'sight' && l.sight ? l.summary : publicLabel(l),
     notes: null,
     quote: q ? { serviceName: q.serviceName, detail: scrub(q.detail), total: q.total } : null,
-    sight: l.sight ? { task: l.sight.task, job: scrub(l.sight.job), materials: (l.sight.materials || []).map(scrub), quote: scrub(l.sight.quote), measuredAgainst: l.sight.measuredAgainst || null, confidence: l.sight.confidence || null } : null,
+    sight: l.sight ? { task: l.sight.task, job: scrub(l.sight.job), materials: (l.sight.materials || []).map(scrub), quote: scrub(l.sight.quote), measuredAgainst: l.sight.measuredAgainst || null, confidence: l.sight.confidence || null, checked: l.sight.checked || null } : null,
     transcript: l.transcript ? '(voicemail transcript: owner only)' : null,
   };
 }

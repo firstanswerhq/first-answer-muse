@@ -20,6 +20,7 @@
     <div class="kpi"><b id="kValue">$0</b><span>booked work</span></div>
     <div class="kpi"><b id="kMissed">0</b><span>leads left waiting</span></div>
   </div>
+  <p class="keynote" id="keynote" role="status" hidden></p>
   <div class="feed" id="feed"></div>
 </section>
 <script type="module">
@@ -39,7 +40,7 @@ function render() {
       ${l.transcript ? `<p><i>Voicemail:</i> "${esc(l.transcript)}"</p>` : ''}
       ${l.quote ? `<p>Quoted: ${esc(l.quote.serviceName)}, ${esc(l.quote.detail)}, <b>$${l.quote.total}</b></p>` : ''}
       ${l.notes ? `<p>Crew note: ${esc(l.notes)}</p>` : ''}
-      ${l.sight ? `<div class="sight"><p><b>Measured from one photo:</b> ${esc(l.sight.job)}</p>${(l.sight.materials || []).length ? `<p>Materials: ${l.sight.materials.map(esc).join(' · ')}</p>` : ''}<p>Quote line: ${esc(l.sight.quote)}</p>${l.sight.measuredAgainst ? `<p class="dim">Measured against ${esc(l.sight.measuredAgainst)}${l.sight.confidence ? ` · ${esc(l.sight.confidence)} confidence` : ''}</p>` : ''}</div>` : ''}
+      ${l.sight ? `<div class="sight"><p><b>Measured from one photo:</b> ${esc(l.sight.job)}</p>${(l.sight.materials || []).length ? `<p>Materials: ${l.sight.materials.map(esc).join(' · ')}</p>` : ''}<p>Quote line: ${esc(l.sight.quote)}</p>${l.sight.checked === 'agreed' ? '<p class="chk ok">Muse Spark checked SAM’s outlines and agreed</p>' : '<p class="chk warn">Unchecked: Muse Spark’s check of the outlines didn’t come back, so measure on site before quoting</p>'}${l.sight.measuredAgainst ? `<p class="dim">Measured against ${esc(l.sight.measuredAgainst)}${l.sight.confidence ? ` · ${esc(l.sight.confidence)} confidence` : ''}</p>` : ''}</div>` : ''}
       ${b ? `<p>Booked <b>${esc(b.when)}</b> · ${esc(b.customer)} · ${esc(b.address)} · <b>$${b.quoteTotal}</b></p>` : ''}
     </div>`;
   }).join('') : '<div class="card"><p>No leads yet. Open the customer view and send a text.</p></div>';
@@ -63,6 +64,10 @@ try {
 const headers = key ? { 'x-owner-key': key } : {};
 async function refresh() {
   const s = await (await fetch('/api/owner/feed', { headers })).json();
+  // A key that the server didn't accept: say so instead of quietly showing the public board.
+  const note = $('keynote');
+  note.hidden = !(key && s.redacted);
+  if (key && s.redacted) note.textContent = 'That owner key didn’t work, so this is the public view: no phone numbers, names or message text. Check the link and open it again.';
   leads.clear();
   bookings.clear();
   s.leads.forEach((l) => leads.set(l.id, l));

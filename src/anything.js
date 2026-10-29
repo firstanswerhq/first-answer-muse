@@ -173,7 +173,13 @@ export function rulerSpec(refKind) {
 }
 
 // A measured length with its ± range, in inches: "0.5 – 0.63 in".
-const rangeIn = (mm, pm) => `${inchStr(Math.max(0, mm - pm))} – ${inchStr(mm + pm)}`;
+// Sixteenths can round an end onto the measured value ("0.5 in – 0.56 in" for 0.56 in): then use hundredths.
+export const rangeIn = (mm, pm) => {
+  const lo = Math.max(0, mm - pm), hi = mm + pm, mid = inchStr(mm);
+  if (inchStr(lo) !== mid && inchStr(hi) !== mid) return `${inchStr(lo)} – ${inchStr(hi)}`;
+  const h = (x) => `${(x / 25.4).toFixed(2)} in`;
+  return `${h(lo)} – ${h(hi)}`;
+};
 
 // ---------- pictures for the page ----------
 

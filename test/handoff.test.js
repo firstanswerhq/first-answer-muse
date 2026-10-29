@@ -78,3 +78,38 @@ test('only a real, recent answer can be sent; nothing typed into the request rea
   await send({ id: h.id, summary: 'injected', job: 'injected' });
   assert.doesNotMatch(JSON.stringify(engine.snapshot()), /injected/);
 });
+
+test('the phone is checked (US, 10 or 11 digits, a string) and locked once set', async () => {
+  engine.reset();
+  const h = rememberHandoff(CHIP);
+  assert.equal((await send({ id: h.id, phone: ['6155550199', '6155550100'] })).status, 400);
+  assert.equal((await send({ id: h.id, phone: { a: 1 } })).status, 400);
+  assert.equal((await send({ id: h.id, phone: '615-555-019' })).status, 400);
+  assert.equal((await send({ id: h.id, phone: '+44 20 7946 0958 12' })).status, 400);
+  assert.equal((await send({ id: h.id, phone: '2 615 555 0199' })).status, 400);
+  const first = await (await send({ id: h.id })).json();
+  assert.equal(first.ok, true);
+  // No number on the first tap: one can be added once, then it is locked.
+  assert.equal((await send({ id: h.id, phone: '1 (615) 555-0199' })).status, 200);
+  assert.equal((await send({ id: h.id, phone: '615-555-0100' })).status, 409);
+  const own = await (await fetch(`${base}/api/owner/feed`, { headers: { 'x-owner-key': 'owner-secret-for-handoff' } })).json();
+  assert.equal(own.leads[0].phone, '6155550199');
+});
+
+test('live answers are not evicted early; expired ones are dropped', async () => {
+  const old = rememberHandoff(CHIP, Date.now() - 2 * 3600e3 - 1000);
+  const first = rememberHandoff(CHIP);
+  for (let i = 0; i < 700; i++) rememberHandoff(CHIP);
+  assert.equal((await send({ id: first.id })).status, 200);
+  assert.equal((await send({ id: old.id })).status, 404);
+});
+
+test('when Spark’s check was skipped, the lead is marked unchecked (public and owner views)', async () => {
+  engine.reset();
+  const skipped = rememberHandoff({ ...DRIVE, checked: 'skipped' });
+  await send({ id: skipped.id });
+  const agreed = rememberHandoff({ ...DRIVE, checked: 'agreed' });
+  await send({ id: agreed.id });
+  const pub = await (await fetch(`${base}/api/owner/feed`)).json();
+  assert.deepEqual(pub.leads.map((l) => l.sight.checked), ['skipped', 'agreed']);
+});

@@ -135,3 +135,12 @@ test('coins from other countries are named and sized', async () => {
   assert.equal(FLAT_REFERENCES.loonie.diameter, 26.5);
   assert.ok(FLAT_REFERENCES.ca_quarter.diameter < FLAT_REFERENCES.quarter.diameter);
 });
+
+test('a ± range never rounds an end onto the measured value', async () => {
+  const { rangeIn } = await import('../src/anything.js');
+  // 0.5625 in ± 4%: sixteenths would give "0.5 in – 0.56 in".
+  const mm = 0.5625 * 25.4;
+  const r = rangeIn(mm, mm * 0.04);
+  assert.equal(r, '0.54 in – 0.59 in');
+  assert.equal(rangeIn(254, 254 * 0.03), '9.75 in – 10.25 in');
+});

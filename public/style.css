@@ -105,3 +105,8 @@ nav a.active { color: var(--ink); }
 .card .sight { border-left: 3px solid var(--sam); padding-left: 10px; margin-top: 6px; }
 .card .sight p { margin: 4px 0; }
 .card .dim { opacity: .7; font-size: 13px; }
+
+.keynote { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: #fff4e5; color: #7a4a00; border: 1px solid #f3c98b; font-size: 14px; }
+.sight .chk { font-size: 13px; font-weight: 600; margin-top: 4px; }
+.sight .chk.ok { color: #1d7a4a; }
+.sight .chk.warn { color: #9a5b00; }
