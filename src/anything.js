@@ -8,7 +8,7 @@
 //   4. The answer comes back as a number, what to buy and what to do, plus the outlines to draw.
 
 import { hasKey, sparkReadPhoto, samSegment, sparkWrite, sparkCheck } from './muse.js';
-import { checkImages, COLOR_NAMES } from './overlay.js';
+import { checkImagesAsync, COLOR_NAMES } from './overlay.js';
 import { DAILY_CAP_MESSAGE } from './guard.js';
 import { measureFlat, FLAT_REFERENCES, maskBoundary } from './flat.js';
 import { best, measureSurface, garageDoorKind, REFERENCES as SURFACE_REFERENCES } from './measure.js';
@@ -863,10 +863,14 @@ export const CHECK_SCHEMA = {
   additionalProperties: false,
 };
 
-export function checkPrompt(items, withCrops) {
+export function checkPrompt(items, withCrops, { drawn = true, frame = null } = {}) {
   const lines = items.map((it) => `- ${COLOR_OF[it.role]} outline: should be ${it.expect}.`).join('\n');
+  const b = (o) => `x ${Math.round(o.box.x1)} to ${Math.round(o.box.x2)}, y ${Math.round(o.box.y1)} to ${Math.round(o.box.y2)}`;
+  const pics = drawn
+    ? `Image 1 is the photo with the outlines drawn on it.${withCrops ? ' The next images are close-ups of each outline, in this order: ' + items.map((it) => COLOR_OF[it.role]).join(', ') + '.' : ''}`
+    : `Image 1 is the customer's photo, with nothing drawn on it. The outlines are given as boxes, in pixels of a ${frame?.w || '?'} × ${frame?.h || '?'} grid laid over the photo (x from the left edge, y from the top):\n${items.map((it) => `- ${COLOR_OF[it.role]} box: ${b(it.obj)}`).join('\n')}`;
   return `You check another model's work before First Answer sends someone a measurement. Meta SAM 3.1 outlined objects in the customer's photo; our geometry will measure the first one using the ${COLOR_NAMES.ruler} one as a ruler of known size.
-Image 1 is the photo with the outlines drawn on it.${withCrops ? ' The next images are close-ups of each outline, in this order: ' + items.map((it) => COLOR_OF[it.role]).join(', ') + '.' : ''}
+${pics}
 ${lines}
 For each outline, in that order, return color, ok (true only if the outline really is that thing, mostly whole, not a different object, not a reflection or a picture of it), and seen (a short phrase naming what is actually inside it; for a coin, name the coin).
 problem: one short sentence on what is wrong, or "" if every outline is right.
@@ -878,14 +882,17 @@ async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK
   if (!items.length) return null;
   const t0 = performance.now();
   const step = { model: 'muse-spark-1.3', step: 'check SAM’s outlines on the photo' };
-  let timer;
+  let timer, images = [];
   try {
-    const pics = checkImages(dataUrl, items.map((it) => ({ role: it.role, obj: it.obj })), check.frame);
-    const images = pics ? [pics.overlay, ...pics.crops.map((c) => c.url)] : [dataUrl];
-    const ans = await Promise.race([
-      live.check(images, checkPrompt(items, Boolean(pics)), CHECK_SCHEMA),
-      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no reply in ${timeoutMs / 1000} s`)), timeoutMs); }),
-    ]);
+    // The timeout starts now and covers drawing the outlines (in a worker thread) as well as Spark's reply.
+    const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`no reply in ${timeoutMs / 1000} s`)), timeoutMs); });
+    const ask = async () => {
+      const pics = await checkImagesAsync(dataUrl, items.map((it) => ({ role: it.role, obj: it.obj })), check.frame, { timeoutMs: Math.min(4000, timeoutMs) });
+      if (pics?.thumb) check.thumb = pics.thumb;
+      images = pics ? [pics.overlay, ...pics.crops.map((c) => c.url)] : [dataUrl];
+      return live.check(images, checkPrompt(items, Boolean(pics?.crops?.length), { drawn: Boolean(pics), frame: check.frame }), CHECK_SCHEMA);
+    };
+    const ans = await Promise.race([ask(), timeout]);
     const got = Array.isArray(ans?.outlines) ? ans.outlines : [];
     const outlines = items.map((it, i) => ({ color: COLOR_OF[it.role], ok: got[i]?.ok !== false, seen: String(got[i]?.seen || '').slice(0, 60) || 'something else', role: it.role, ruler: it.ruler, name: it.name }));
     const agreed = got.length >= items.length && outlines.every((o) => o.ok);

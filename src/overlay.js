@@ -1,10 +1,34 @@
 // Pictures for Muse Spark's check of SAM's work: the customer's photo with SAM's outlines drawn on
-// it (magenta = what we measure, orange = the ruler, blue = the other side of a gap), plus a close-up crop of each outline. Pure JS
-// (jpeg-js), no native image libraries. The page always sends JPEG; anything else returns null and
-// the check falls back to the plain photo plus box coordinates.
+// it (magenta = what we measure, orange = the ruler, blue = the other side of a gap), plus a close-up
+// crop of each outline, and a small copy for the owner board. Pure JS (jpeg-js), no native image
+// libraries. The page always sends JPEG of at most 1600 px; a PNG or WebP, or a JPEG over MAX_PIXELS,
+// returns null, and the check then sends the plain photo with SAM's boxes written out as pixel
+// coordinates in the prompt (checkPrompt). Decoding runs in a worker thread (checkImagesAsync), so a
+// big photo never blocks the server, and the caller's timeout covers it.
 
 import jpeg from 'jpeg-js';
+import { Worker } from 'node:worker_threads';
 import { decodeMaskToRaster } from '@meta-sam/parser';
+
+export const MAX_PIXELS = 2_500_000; // about 2.5 MP: what jpeg-js can decode inside 64 MB; the page sends at most 1600 × 1200
+export const MAX_MEMORY_MB = 64;
+
+// Width and height from a JPEG's frame header (SOFn), without decoding it. null if not a JPEG.
+export function jpegSize(buf) {
+  if (!buf || buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) { i++; continue; }
+    const m = buf[i + 1];
+    if (m === 0xff) { i++; continue; }
+    if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { i += 2; continue; }
+    const len = buf.readUInt16BE(i + 2);
+    if ((m >= 0xc0 && m <= 0xcf) && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+    if (m === 0xda) return null;
+    i += 2 + len;
+  }
+  return null;
+}
 
 export const COLORS = { target: [255, 40, 210], ruler: [255, 150, 20], other: [40, 120, 255] };
 export const COLOR_NAMES = { target: 'MAGENTA', ruler: 'ORANGE', other: 'BLUE' };
@@ -13,7 +37,10 @@ export function decodeDataUrl(dataUrl) {
   const m = /^data:image\/jpe?g;base64,(.+)$/.exec(String(dataUrl || ''));
   if (!m) return null;
   try {
-    const img = jpeg.decode(Buffer.from(m[1], 'base64'), { useTArray: true, maxResolutionInMP: 40, maxMemoryUsageInMB: 512 });
+    const buf = Buffer.from(m[1], 'base64');
+    const size = jpegSize(buf);
+    if (!size || size.width * size.height > MAX_PIXELS) return null; // too big to decode here: skip the overlay
+    const img = jpeg.decode(buf, { useTArray: true, maxResolutionInMP: MAX_PIXELS / 1e6, maxMemoryUsageInMB: MAX_MEMORY_MB });
     return { width: img.width, height: img.height, data: img.data };
   } catch {
     return null;
@@ -82,10 +109,11 @@ function paint(view, items, frameScale) {
 }
 
 /**
- * checkImages(dataUrl, items, frame) -> { overlay, crops: [{ role, url }] } or null
- *   items: [{ role: 'target' | 'ruler', obj }]  (SAM objects with box and mask, in SAM frame pixels)
+ * checkImages(dataUrl, items, frame) -> { overlay, crops: [{ role, url }], thumb } or null
+ *   items: [{ role: 'target' | 'ruler' | 'other', obj }]  (SAM objects with box and mask, in SAM frame pixels)
+ *   thumb: a small copy of the overlay (thumbMax px) for the owner board.
  */
-export function checkImages(dataUrl, items, frame, { overlayMax = 1024, cropMax = 448 } = {}) {
+export function checkImages(dataUrl, items, frame, { overlayMax = 1024, cropMax = 448, thumbMax = 480 } = {}) {
   const img = decodeDataUrl(dataUrl);
   if (!img || !items.length) return null;
   // SAM's frame can differ from the decoded photo size (it reports its own w/h): scale between them.
@@ -104,5 +132,22 @@ export function checkImages(dataUrl, items, frame, { overlayMax = 1024, cropMax 
     paint(v, [it], fs);
     crops.push({ role: it.role, url: toDataUrl(v) });
   }
-  return { overlay: toDataUrl(full), crops };
+  const t = resample(full, 0, 0, full.width, full.height, thumbMax);
+  return { overlay: toDataUrl(full), crops, thumb: toDataUrl(t, 72) };
+}
+
+// The same, in a worker thread: the event loop stays free, and past timeoutMs the worker is stopped
+// and this resolves null (the check then goes on with the plain photo).
+export function checkImagesAsync(dataUrl, items, frame, { timeoutMs = 4000, ...opts } = {}) {
+  return new Promise((resolve) => {
+    let w;
+    try {
+      w = new Worker(new URL('./overlay-worker.js', import.meta.url), { workerData: { dataUrl, items, frame, opts }, resourceLimits: { maxOldGenerationSizeMb: 192 } });
+    } catch { return resolve(null); }
+    const done = (v) => { clearTimeout(timer); w.terminate().catch(() => {}); resolve(v); };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    w.once('message', (m) => done(m?.ok ? m.out : null));
+    w.once('error', () => done(null));
+    w.once('exit', () => done(null));
+  });
 }
