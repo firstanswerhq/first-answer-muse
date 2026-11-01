@@ -1208,7 +1208,7 @@ export function stepDetail(s) {
   if (r.corrected === false) return `nothing new from SAM (${r.why}); no number sent`;
   if (r.combined === false) return `not combined: ${r.photo ? `photo ${r.photo} ${r.why}` : `the union ${r.why}`}${r.gapMm ? ` (${Math.round(r.gapMm / 304.8 * 10) / 10} ft away)` : ''}; best single photo used`;
   if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}${r.language === 'es' ? ' · language: Spanish' : ''}`;
-  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)', sqftSeen: 'floor seen (sq ft)', turned: 'turned 180°', fill: 'fills a rectangle', farWallErrorIn: 'far wall error from 1 px on the sheet (in)' };
+  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)', sqftSeen: 'floor seen (sq ft)', turned: 'turned 180°', fill: 'fills a rectangle', farWallErrorIn: 'far wall error from the sheet’s corners (in)' };
   const pretty = (k) => NAMED[k] || k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\s?Mm2\b/, ' mm²').replace(/\s?Mm\b/, ' mm').replace(/\s?Ft\b/, ' ft').replace(/\s?In2\b/, ' sq in').replace(/\s?Pct\b/, ' %').toLowerCase();
   const keep = Object.entries(r).filter(([k, v]) => !['ok', 'notes', 'reason', 'clipped'].includes(k) && v != null && ['number', 'string', 'boolean'].includes(typeof v));
   return keep.slice(0, 5).map(([k, v]) => `${pretty(k)}: ${typeof v === 'number' ? (k.endsWith('Pct') ? `±${Math.round(v * 100)}%` : Math.round(v * 100) / 100) : v}`).join(' · ');
