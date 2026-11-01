@@ -232,6 +232,12 @@ body {
 .m-retry:disabled { opacity: .45; cursor: default; }
 
 /* how it was measured */
+/* The floor conversation: photos in so far, the next sample photo, Start over. */
+.r-next { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 0; padding: 9px 12px; border: 1px dashed var(--edge-hi); border-radius: 12px; font-size: 12.5px; color: #c4d3ea; }
+.r-next span { flex: 1 1 100%; }
+.r-next button { border-radius: 999px; padding: 7px 12px; font: 600 12.5px/1 var(--body); cursor: pointer; }
+.r-next .r-sample { background: linear-gradient(135deg, #5af3ff, #2fb7ff); color: #00202a; border: 0; }
+.r-next .r-reset { background: transparent; color: var(--mute); border: 1px solid var(--edge); }
 .r-pipe { border-top: 1px solid var(--edge); padding: 12px 16px 14px; background: rgba(5, 12, 26, 0.5); }
 .r-pipe h4 { margin: 0 0 9px; font: 700 13px/1.2 var(--display); color: #cfe0ff; display: flex; justify-content: space-between; gap: 8px; }
 .r-pipe h4 small { font: 600 11.5px/1.2 var(--body); color: var(--mute); }

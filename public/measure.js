@@ -309,6 +309,7 @@ const UI = {
     priced: (to) => `Demo price from ${to}’s own price list (a demo business).`, unpriced: (to) => `Not on ${to}’s price list, so the owner prices it.`, never: 'First Answer never makes prices up.', ownerEnglish: '',
     phone: 'Your phone (optional)', phoneLabel: 'Your phone number, optional, so they can text you back', send: (to) => `Send this to ${to}`, sending: 'Sending…', seeBoard: (o) => `See ${o}’s board`, sendFail: 'Couldn’t send it just now. Try again in a moment.',
     panel: 'How Meta’s models measured it', fixed: ['corrected SAM’s outline →', 'outlined it again → re-measured'], photo: 'Photo',
+    photosIn: (n) => `${n} photo${n === 1 ? '' : 's'} of this floor so far.`, noPhotos: 'No usable photo of this floor yet.', nextPhoto: 'Tap the camera for the next one; it joins these.', nextSample: 'Send the next sample photo', startOver: 'Start over', startedOver: 'Started over: the next photo begins a new floor.',
     conf: { good: 'Measured', fair: 'Close estimate', low: 'Rough — see tip' },
   },
   es: {
@@ -319,6 +320,7 @@ const UI = {
     priced: (to) => `Precio de demostración de la lista de ${to} (un negocio de demostración).`, unpriced: (to) => `No está en la lista de precios de ${to}; el dueño le pone precio.`, never: 'First Answer nunca inventa precios.', ownerEnglish: 'El negocio lo recibe en inglés.',
     phone: 'Tu teléfono (opcional)', phoneLabel: 'Tu número de teléfono, opcional, para que te escriban', send: (to) => `Enviar a ${to}`, sending: 'Enviando…', seeBoard: (o) => `Ver el tablero de ${o}`, sendFail: 'No se pudo enviar. Inténtalo de nuevo en un momento.',
     panel: 'Cómo lo midieron los modelos de Meta', fixed: ['corrigió el contorno de SAM →', 'lo marcó otra vez → medido de nuevo'], photo: 'Foto',
+    photosIn: (n) => `${n} foto${n === 1 ? '' : 's'} de este piso por ahora.`, noPhotos: 'Todavía no hay una foto útil de este piso.', nextPhoto: 'Toca la cámara para la siguiente; se suma a estas.', nextSample: 'Mandar la siguiente foto de muestra', startOver: 'Empezar de nuevo', startedOver: 'Empezamos de nuevo: la siguiente foto empieza otro piso.',
     conf: { good: 'Medido', fair: 'Estimado cercano', low: 'Aproximado: ve el consejo' },
   },
 };
@@ -394,6 +396,23 @@ function renderReply(r, dataUrl, dataUrls = [dataUrl]) {
   el.appendChild(body);
   const sendForm = body.querySelector('.r-send');
   if (sendForm) sendForm.addEventListener('submit', (e) => { e.preventDefault(); sendToBusiness(r.handoff, sendForm, body.querySelector('.r-sent'), r.lang); });
+  // A floor conversation: how many photos are in, the next sample photo (demo) and Start over.
+  if (r.task === 'floor_tile' && (r.ok !== false || r.dropped)) {
+    const kept = (r.photos || (r.combined?.photos) || (r.ok !== false ? 1 : 0));
+    const row = document.createElement('div');
+    row.className = 'r-next';
+    const more = kept < MAX_PHOTOS && (r.wantMore || r.dropped);
+    row.innerHTML = `<span>${esc(kept ? T.photosIn(kept) : T.noPhotos)}${more ? ` ${T.nextPhoto}` : ''}</span>${pendingSamples.length && more ? `<button type="button" class="r-sample">${esc(T.nextSample)}</button>` : ''}<button type="button" class="r-reset">${esc(T.startOver)}</button>`;
+    body.appendChild(row);
+    row.querySelector('.r-sample')?.addEventListener('click', async (e) => {
+      if (busy) return;
+      e.target.disabled = true;
+      const url = pendingSamples.shift();
+      const res = await fetch(url).catch(() => null);
+      if (res?.ok) send(await res.blob(), floorText || textIn.value.trim());
+    });
+    row.querySelector('.r-reset').addEventListener('click', () => { resetFloor(); row.innerHTML = `<span>${esc(T.startedOver)}</span>`; });
+  }
 
   const pipe = (r.pipeline || []).filter((p) => p && p.step);
   if (pipe.length) {
@@ -448,6 +467,7 @@ async function sendToBusiness(handoff, form, out, lang) {
   } catch {}
   out.hidden = false;
   if (r?.ok) {
+    resetFloor();
     form.remove();
     out.className = 'r-sent ok';
     out.innerHTML = `${esc(r.message)} <a href="${esc(r.board || '/owner.html')}" target="_blank" rel="noopener">${esc(T.seeBoard(r.owner || 'the owner'))}</a>`;
@@ -516,21 +536,36 @@ function errorBubble(r, retry) {
 }
 
 let busy = false;
-// blobs: one photo, or 2 to 4 photos of one floor (sent as dataUrls; the first is also dataUrl).
-async function send(blobs, text, { again = false } = {}) {
+
+// ---------- the floor conversation ----------
+// A floor is measured the way texting works: one photo gets what it shows ("so far") and a request for
+// more; each later photo in the same conversation is combined with the earlier ones. The page keeps the
+// floor photos of the current conversation (data URLs) and posts all of them each time, so the server
+// stays stateless. The set resets when the customer moves to another task, taps Start over, or sends
+// the combined job to the business.
+let floorSet = []; // data URLs of this conversation's floor photos, in order
+let floorText = '';
+let pendingSamples = []; // the Tile floor chip's remaining sample photos (URLs), sent one at a time
+function resetFloor() { floorSet = []; floorText = ''; pendingSamples = []; }
+
+// blobs: the new photo(s). In a floor conversation the earlier floor photos go along with them.
+async function send(blobs, text, { again = false, extraUrls = null } = {}) {
   if (busy) return;
-  blobs = Array.isArray(blobs) ? blobs.slice(0, MAX_PHOTOS) : [blobs];
+  blobs = Array.isArray(blobs) ? blobs : [blobs];
   busy = true;
   $('sendBtn').disabled = true;
   let wait = null;
   try {
-    const [dataUrls, exifB64] = await Promise.all([Promise.all(blobs.map((b) => toDataUrl(b))), headB64(blobs[0]).catch(() => null)]);
+    const [fresh, exifB64] = await Promise.all([Promise.all(blobs.map((b) => toDataUrl(b))), headB64(blobs[0]).catch(() => null)]);
+    // Earlier floor photos first, then the new ones (at most 4 in all).
+    const earlier = extraUrls || (floorSet.length && (floorMode() || FLOOR_WORDS.test(text)) ? floorSet : []);
+    const dataUrls = [...earlier, ...fresh].slice(0, MAX_PHOTOS);
     const dataUrl = dataUrls[0];
     if (!again) {
-      bubble('me', `<img src="${dataUrl}" alt="Photo sent">${dataUrls.length > 1 ? `<div class="more">${dataUrls.slice(1).map((u, i) => `<img src="${u}" alt="Photo ${i + 2} sent">`).join('')}</div>` : ''}`, 'photo');
+      bubble('me', `<img src="${fresh[0]}" alt="Photo sent">${fresh.length > 1 ? `<div class="more">${fresh.slice(1).map((u, i) => `<img src="${u}" alt="Photo ${i + 2} sent">`).join('')}</div>` : ''}`, 'photo');
       if (text) bubble('me', esc(text));
     }
-    wait = working(dataUrl, dataUrls.length);
+    wait = working(fresh[0], dataUrls.length);
     let r;
     try {
       r = await postMeasure({ dataUrl, ...(dataUrls.length > 1 ? { dataUrls } : {}), text, exifB64 }, (s) => wait.step(s));
@@ -540,9 +575,15 @@ async function send(blobs, text, { again = false } = {}) {
     if (r && r.ok !== false && (r.headline || r.answer)) renderReply(r, dataUrl, dataUrls);
     // Not measured, but SAM outlined something: show the photo with the outlines and the tip.
     else if (r && r.ok === false && !r.retry && r.overlay?.frame && (r.overlay.outlines || []).length) renderReply(r, dataUrl, dataUrls);
-    else errorBubble(r, () => send(blobs, text, { again: true }));
+    else errorBubble(r, () => send(blobs, text, { again: true, extraUrls: earlier }));
+    // Remember the floor photos that were usable; a photo the server dropped (no sheet, sheet too small) is left out.
+    if (r && r.task === 'floor_tile' && (r.ok !== false || r.dropped)) {
+      const dropped = new Set(r.dropped || []);
+      floorSet = dataUrls.filter((_, i) => !dropped.has(i + 1));
+      floorText = text;
+    } else if (r && r.task && r.task !== 'floor_tile') resetFloor();
   } catch {
-    errorBubble({ ask: FALLBACK_ERR, retry: true }, () => send(blobs, text, { again: true }));
+    errorBubble({ ask: FALLBACK_ERR, retry: true }, () => send(blobs, text, { again: true, extraUrls: earlier }));
   } finally {
     busy = false;
     $('sendBtn').disabled = false;
@@ -560,6 +601,7 @@ $('compose').addEventListener('submit', (e) => {
     return;
   }
   const blobs = staged.map((s) => s.blob);
+  if (!floorMode() && !FLOOR_WORDS.test(text)) resetFloor();
   textIn.value = '';
   unstage();
   send(blobs, text);
@@ -588,21 +630,25 @@ function renderChips() {
         // A chip may have several photos (tile.jpg, tile-2.jpg ...): all of them, in order.
         const urls = Array.isArray(srv.urls) && srv.urls.length ? srv.urls.slice(0, MAX_PHOTOS) : [srv.url];
         const blobs = [];
-        for (const u of urls) { const res = await fetch(u).catch(() => null); if (res?.ok) blobs.push(await res.blob()); }
+        const res = await fetch(urls[0]).catch(() => null);
+        if (res?.ok) blobs.push(await res.blob());
         if (!blobs.length) { textIn.value = text; textIn.focus(); return; }
         unstage();
+        resetFloor();
         if (s.id === 'tile') {
-          // The floor chip stages its photos instead of sending them, so more photos of the same floor can
-          // be added ("Add another photo of the same floor") before Send.
+          // The floor chip plays the conversation: the first sample photo goes now, the reply asks for
+          // more, and a "Send the next sample photo" button sends the next one into the same floor.
           floorChip = true;
-          textIn.value = text;
-          blobs.forEach((bl, i) => stage(bl, { add: i > 0 }));
+          pendingSamples = urls.slice(1);
+          textIn.value = '';
+          send(blobs[0], text);
           return;
         }
         textIn.value = '';
         send(blobs[0], text);
       } else {
         floorChip = s.id === 'tile';
+        if (!floorChip) resetFloor();
         textIn.value = text;
         if (staged.length) { keepFirstUnlessFloor(); renderStaged(); }
         textIn.focus();
@@ -625,4 +671,4 @@ fetch('/api/health').then((r) => r.json()).then((h) => {
   if (h.relay === 'direct') $('privacyRoute').textContent = 'Your photo(s) and message go from our server straight to Meta’s Muse Spark and SAM 3.1';
 }).catch(() => {});
 
-bubble('note', 'Text one photo and a question. Put a gift card, quarter, sheet of paper, soda can, or a door in the shot and it becomes the ruler. For a whole floor, leave one sheet of paper on it and send up to 4 photos from different doorways.');
+bubble('note', 'Text one photo and a question. Put a gift card, quarter, sheet of paper, soda can, or a door in the shot and it becomes the ruler. For a whole floor, leave one sheet of paper on it, send a photo from one doorway, then more from other doorways as asked (up to 4): each one is combined with the earlier ones.');
