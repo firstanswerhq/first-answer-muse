@@ -120,11 +120,18 @@ The numbers above come from synthetic scenes with known answers. Real-photo accu
 - **What is sent where:** the customer's photo (or photos, for a floor) and message go from our server to Meta's Model API (Muse Spark and SAM 3.1) only to answer. **By default they pass through First Answer's relay**, a Supabase Edge Function (`relay/meta-relay.ts`) that forwards Meta API calls and stores nothing; it exists because Meta's API turns away some cloud hosts, Render among them. `META_RELAY_URL=direct` calls Meta directly. Meta's handling of what it receives is covered by Meta's terms.
 - **What is kept:** nothing is written to disk. An answer is kept in memory for 2 hours so the customer can tap Send. A sent job (the measured job, the phone number if given, and a 480 px copy of the first photo with SAM's masks drawn on it) stays on the owner board in memory until the server restarts. The page says this under the chat, and names the route (relay or direct) the server actually uses.
 
+### Try the whole-floor measure in 60 seconds
+
+1. Open `/measure.html` and tap **Tile floor**. With the sample images in place, the two bathroom photos (same room, doorway and far corner, one sheet of paper on the floor) are staged with the question filled in and the bar says "2 photos of the floor ready"; without them, the question is filled in and you attach your own two photos with the camera button and **Add another photo of the same floor**.
+2. Tap **Send**. The waiting list shows SAM outlining the floor and the paper in each photo ("1 of 2 done", "2 of 2 done"), our geometry mapping each floor onto the paper's plane and combining them, then Muse Spark checking every photo's outlines.
+3. The reply shows photo 1 full size and photo 2 under it, each with SAM's masks, then "The floor is about W by L (N sq ft), combined from 2 photos on the paper's plane" with the tiles to buy, and the panel's combine step with the floor seen, how much of a rectangle it fills and each photo's coverage.
+4. With your own floor: lay one sheet of printer paper on it square to a wall, tap the camera for the first photo, then **Add another photo of the same floor** for each further doorway or corner (up to 4), leaving the paper where it is. Each thumbnail has a × to drop it.
+
 ## Run it
 
 ```bash
 npm install
-npm test                         # 180 tests, no key needed, no Meta credits spent (fixtures and stand-ins)
+npm test                         # 187 tests, no key needed, no Meta credits spent (fixtures and stand-ins)
 npm start                        # http://localhost:3000/measure.html
 MODEL_API_KEY=... npm start      # live on the Meta Model API
 ```
@@ -141,7 +148,9 @@ MODEL_API_KEY=... npm start      # live on the Meta Model API
 | `PHOTO_LIMIT` | Photos per 10 minutes per IP on `/api/photo` (default 20, never more) |
 | `META_DAILY_CAP` | Meta calls per day across all visitors (default 1500) |
 
-**Sample photos:** put `public/samples/<id>.jpg` (or `.png`/`.webp`) with `public/samples/<id>.txt` beside it: first line is the chip label, the rest is the message sent with the photo. Ids: `tile`, `windshield`, `shoe`, `shed`, `driveway` (a `face` sample is listed only with `SIGHT_FACE=1`). A chip with a photo gets a glowing dot and sends the photo when tapped; the photos are served as static files from `/samples/`.
+**Sample photos:** `public/samples/<id>.jpg` (or `.png`/`.webp`) with `public/samples/<id>.txt` beside it: first line is the chip label, the rest is the message sent with the photo. Ids: `tile`, `windshield`, `shoe`, `shed`, `driveway` (a `face` sample is listed only with `SIGHT_FACE=1`). A chip can have several photos: `tile.jpg`, `tile-2.jpg`, `tile-3.jpg` ... are one sample, staged in that order. A chip with a photo gets a glowing dot; tapping it sends the photo (the Tile floor chip stages its photos first, so more can be added before Send). The photos are served as static files from `/samples/`.
+
+The sample set planned for the repo is **AI-generated demo images**, not photos of real customers' homes: `tile.jpg` and `tile-2.jpg` are the **same bathroom from its two ends** (the doorway and the far corner) with one letter sheet on the floor; `windshield.jpg` is a chip with a quarter; `shed.jpg` a side yard with an exterior door; `driveway.jpg` a driveway with a double garage door. The `.txt` files for them are in `public/samples/`; the images are added as they are generated (until a chip's image is there, the chip only fills in the question). There is no shoe sample, so that chip is text-only. Measurements on generated images show the pipeline end to end, but a generated room has no true size to check against; the accuracy numbers above come from the rendered test scenes.
 
 Node 22, Express, the OpenAI SDK pointed at the Meta Model API, `@meta-sam/parser` for SAM masks, `jpeg-js` for drawing SAM's outlines for Spark's check, `ws`, `multer`. Hosted on Render (`render.yaml`).
 
@@ -192,7 +201,8 @@ Every commit in this repository is from the hackathon window; the first is Oct 2
 | Oct 28 | Privacy: README and page name the Supabase relay route and what is kept in memory | `44b43c8` |
 | Oct 28 | Tile answer passes our own unit check; every chip's template is tested | `5a171ee` |
 | Oct 28 | Hundredths under an inch; owner gets the job in English for Spanish questions; Spanish outline labels | `0eaf815` |
-| Nov 1 | Whole floor from several photos: 2 to 4 photos of one floor with the same sheet of paper combined on the paper's plane (`src/floor.js`), per-photo steps and checks, retake and different-floor refusals, `dataUrls` on `/api/measure` with per-photo limits, the page's "Add another photo of the same floor", Spanish, tests | `8f438dc`, `9c4d81e`, `b5143b3`, `4b3f65e`, `2c833ab`, `4a3c7cc` |
+| Nov 1 | Whole floor from several photos: 2 to 4 photos of one floor with the same sheet of paper combined on the paper's plane (`src/floor.js`), per-photo steps and checks, retake and different-floor refusals, `dataUrls` on `/api/measure` with per-photo limits, the page's "Add another photo of the same floor", Spanish, tests | `8f438dc`, `9c4d81e`, `b5143b3`, `4b3f65e`, `2c833ab`, `4a3c7cc`, `3d41482` |
+| Nov 1 | Review fixes: the paper's long edge chosen with the camera (focal length), not pixel length; per-photo sanity bounds; rectangle-fill check; refused answers withhold every panel number; page never wipes staged photos, per-thumbnail ×, pins stay inside the photo; JSON 413; sample chips with several photos; README honesty on the rectangle limit and the half-turn claim | `23b9afe`, `a0246ec`, `7486132`, `246408f`, `README commit` |
 
 See `git log` for the full history.
 
