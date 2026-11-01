@@ -2,6 +2,7 @@
 // eyes 12 mm behind the forehead, nose 8, mouth 20. True sizes: eye centers 63 mm apart,
 // eyes 30 wide, nose 34, mouth 50.
 import test from 'node:test';
+process.env.SIGHT_FACE = '1'; // face measuring is off by default; these tests turn it on
 import assert from 'node:assert/strict';
 import { measureFace, compareVisits } from '../src/face.js';
 import { measureAnything, guessFromText } from '../src/anything.js';

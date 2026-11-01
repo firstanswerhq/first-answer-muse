@@ -97,7 +97,28 @@ nav a.active { color: var(--ink); }
 .card .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .card .when { margin-left: auto; color: var(--mute); font-size: 12.5px; }
 .chan { font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #2a3440; }
-.chan.photo { background: var(--sam); } .chan.voicemail { background: var(--voice); } .chan.call { background: var(--ok); color: #04210b; } .chan.text { background: var(--spark); }
+.chan.photo, .chan.sight { background: var(--sam); } .chan.voicemail { background: var(--voice); } .chan.call { background: var(--ok); color: #04210b; } .chan.text { background: var(--spark); }
 .status { font-size: 12px; color: var(--mute); }
 .status.booked { color: var(--ok); font-weight: 700; }
 .card p { margin: 8px 0 0; color: #c9d3de; line-height: 1.45; font-size: 14px; }
+
+.card .sight { border-left: 3px solid var(--sam); padding-left: 10px; margin-top: 6px; }
+.card .sight p { margin: 4px 0; }
+.card .dim { opacity: .7; font-size: 13px; }
+
+.keynote { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: rgba(210, 153, 34, .14); color: #f2cc60; border: 1px solid rgba(210, 153, 34, .5); font-size: 14px; }
+.sight .chk { font-size: 13px; font-weight: 600; margin-top: 4px; }
+.sight .chk.ok { color: var(--ok); }
+.sight .chk.warn { color: var(--warn); }
+
+.bizpick { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 16px; }
+.bizpick a { font-size: 13px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--mute); text-decoration: none; background: var(--panel); margin: 0; }
+.bizpick a.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.biztag { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #2a3440; color: var(--ink); white-space: nowrap; }
+
+.sight { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.sight-body { flex: 1 1 260px; min-width: 0; }
+.sight-head { font-weight: 700; font-size: 16px; margin: 0 0 4px; }
+.sight-photo { margin: 0; flex: 0 1 240px; max-width: 100%; }
+.sight-photo img { display: block; width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); }
+.sight-photo figcaption { font-size: 12px; color: var(--mute); margin-top: 4px; }

@@ -3,12 +3,13 @@ import { parseSam } from '../src/muse.js';
 import { encodeSegmentationMask } from '../node_modules/@meta-sam/parser/dist/mask-codec.js';
 
 // Camera over the plane z=0 (units: mm). Tilt in degrees around the x axis, distance D from the
-// center of view, focal length f in pixels, photo W x H.
-export function camera({ tiltDeg = 30, D = 380, f = 1400, W = 1280, H = 960, panDeg = 10 }) {
+// center of view, focal length f in pixels, photo W x H. aim: the point on the plane the camera
+// looks at (the origin by default), so several cameras can each see part of one floor.
+export function camera({ tiltDeg = 30, D = 380, f = 1400, W = 1280, H = 960, panDeg = 10, aim = [0, 0] }) {
   const t = (tiltDeg * Math.PI) / 180, p = (panDeg * Math.PI) / 180;
   // camera axes in world coords: looks toward the plane from above and to the side
   const fwd = [Math.sin(t) * Math.sin(p), Math.sin(t) * Math.cos(p), -Math.cos(t)];
-  const C = fwd.map((v) => -v * D); // camera center
+  const C = fwd.map((v, i) => -v * D + (i < 2 ? aim[i] : 0)); // camera center
   const up0 = [0, 0, 1];
   const right = norm(cross(fwd, up0).every((v) => Math.abs(v) < 1e-9) ? [1, 0, 0] : cross(fwd, up0));
   const down = norm(cross(fwd, right));

@@ -3,6 +3,8 @@
 // Muse Voice Transcribe for voicemail. The key is read from MODEL_API_KEY and never logged.
 
 import OpenAI from 'openai';
+import { buildObjectPrompt } from '@meta-sam/parser';
+import { metaCalls, MetaBudgetError } from './guard.js';
 
 export const DIRECT_URL = process.env.MODEL_API_BASE_URL || 'https://api.meta.ai/v1';
 // Optional relay (relay/meta-relay.ts on Supabase) for hosts Meta's API turns away. When
@@ -19,27 +21,51 @@ export const TRANSCRIBE = 'muse-voice-transcribe-1.0';
 
 export const hasKey = () => Boolean(process.env.MODEL_API_KEY);
 
+// Every HTTP attempt to Meta counts against the global daily cap (guard.js); past it, calls fail fast.
+function spend() {
+  if (!metaCalls.take(1)) throw new MetaBudgetError();
+}
+
+// The SDK's own retries are off (they would be uncounted HTTP attempts). We retry here instead, and
+// every attempt takes one from the daily cap: rate limits, server errors and dropped connections only.
+export function retryable(e) {
+  const st = e?.status;
+  if (st) return st === 408 || st === 409 || st === 429 || st >= 500;
+  return /APIConnection|fetch failed|ECONN|socket|network|timed? ?out/i.test(`${e?.name} ${e?.message}`) && e?.name !== 'MetaBudgetError';
+}
+export async function counted(fn, { retries = 0, backoffMs = 400 } = {}) {
+  for (let i = 0; ; i++) {
+    spend();
+    try {
+      return await fn();
+    } catch (e) {
+      if (i >= retries || !retryable(e)) throw e;
+      await new Promise((r) => setTimeout(r, backoffMs * 2 ** i));
+    }
+  }
+}
+
 let client;
 function api() {
-  if (!client) client = new OpenAI({ baseURL: BASE_URL, apiKey: process.env.MODEL_API_KEY, defaultHeaders: relayHeaders(), timeout: 60_000, maxRetries: 2 });
+  if (!client) client = new OpenAI({ baseURL: BASE_URL, apiKey: process.env.MODEL_API_KEY, defaultHeaders: relayHeaders(), timeout: 60_000, maxRetries: 0 });
   return client;
 }
 
 // One Chat Completions call with tools. Returns the assistant message.
 export async function sparkChat({ messages, tools, effort = 'low' }) {
-  const r = await api().chat.completions.create({
+  const r = await counted(() => api().chat.completions.create({
     model: SPARK,
     messages,
     tools,
     tool_choice: tools?.length ? 'auto' : undefined,
     reasoning_effort: effort,
-  });
+  }), { retries: 2 });
   return { message: r.choices[0].message, usage: r.usage };
 }
 
 // Muse Spark reads a photo and returns structured JSON about the job in it.
 export async function sparkReadPhoto({ dataUrl, prompt, schema }) {
-  const r = await api().chat.completions.create({
+  const r = await counted(() => api().chat.completions.create({
     model: SPARK,
     reasoning_effort: 'low',
     messages: [
@@ -47,12 +73,45 @@ export async function sparkReadPhoto({ dataUrl, prompt, schema }) {
       { role: 'user', content: [{ type: 'image_url', image_url: { url: dataUrl } }, { type: 'text', text: 'Read this photo.' }] },
     ],
     response_format: { type: 'json_schema', json_schema: { name: 'photo_read', strict: true, schema } },
-  });
+  }), { retries: 2 });
+  return JSON.parse(r.choices[0].message.content);
+}
+
+// Muse Spark words a short reply from facts we hand it (no photo, no tools). Short timeout, no retries:
+// the caller falls back to its own template if this is slow or fails.
+export async function sparkWrite({ system, facts, timeoutMs = 6000 }) {
+  spend();
+  const r = await api().chat.completions.create({
+    model: SPARK,
+    reasoning_effort: 'low',
+    max_completion_tokens: 600,
+    messages: [
+      { role: 'developer', content: system },
+      { role: 'user', content: typeof facts === 'string' ? facts : JSON.stringify(facts) },
+    ],
+  }, { timeout: timeoutMs, maxRetries: 0 });
+  return String(r.choices[0].message.content || '').trim();
+}
+
+// Muse Spark looks at several images at once (the photo with SAM's outlines drawn on it, and a close-up
+// of each outline) and answers in JSON: does it agree with what SAM outlined? Short timeout, no retries.
+export async function sparkCheck({ images, prompt, schema, timeoutMs = 10000 }) {
+  spend();
+  const r = await api().chat.completions.create({
+    model: SPARK,
+    reasoning_effort: 'low',
+    messages: [
+      { role: 'developer', content: prompt },
+      { role: 'user', content: [...images.map((url) => ({ type: 'image_url', image_url: { url } })), { type: 'text', text: 'Check the outlines.' }] },
+    ],
+    response_format: { type: 'json_schema', json_schema: { name: 'outline_check', strict: true, schema } },
+  }, { timeout: timeoutMs, maxRetries: 0 });
   return JSON.parse(r.choices[0].message.content);
 }
 
 // SAM 3.1: segment every instance of a short noun phrase. Non-streaming; same text format as the stream.
 export async function samSegment({ dataUrl, concept }) {
+  spend();
   const res = await fetch(`${BASE_URL}/responses`, {
     method: 'POST',
     headers: { ...relayHeaders(), Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
@@ -66,6 +125,26 @@ export async function samSegment({ dataUrl, concept }) {
   const body = await res.json();
   const text = body.output_text ?? (body.output || []).flatMap((o) => o.content || []).map((c) => c.text || '').join('');
   return parseSam(text);
+}
+
+// SAM 3.1 with a point instead of a noun phrase: Muse Spark marked a spot on the thing SAM missed.
+// The prompt text comes from @meta-sam/parser's buildObjectPrompt (one positive point, object id 0, on
+// the media's w × h as SAM reported it); a request never mixes a point with a noun phrase.
+export async function samSegmentAt({ dataUrl, frame, point }) {
+  const text = buildObjectPrompt({ size: { width: frame.w, height: frame.h }, objects: [{ id: 0, prompts: [{ points: [{ x: point.x, y: point.y }] }] }] });
+  spend();
+  const res = await fetch(`${BASE_URL}/responses`, {
+    method: 'POST',
+    headers: { ...relayHeaders(), Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: SAM,
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text }, { type: 'input_image', image_url: dataUrl }] }],
+      metadata: { include_confidence: 'true' },
+    }),
+  });
+  if (!res.ok) throw new Error(`SAM ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const body = await res.json();
+  return parseSam(body.output_text ?? (body.output || []).flatMap((o) => o.content || []).map((c) => c.text || '').join(''));
 }
 
 // Parse SAM's special-token text into objects: box, confidence, and the mask (still encoded).
@@ -91,6 +170,7 @@ export function parseSam(text) {
 
 // Muse Voice Transcribe: one WAV (mono 16-bit PCM, 16 or 24 kHz, up to 10 minutes) in, text out.
 export async function transcribeWav(wavBuffer) {
+  spend();
   const form = new FormData();
   form.append('request', new Blob([JSON.stringify({ model: TRANSCRIBE, audioEncoding: 'WAV', mode: 'ENDPOINTING' })], { type: 'application/json' }));
   form.append('audio', new Blob([wavBuffer], { type: 'audio/wav' }), 'voicemail.wav');
@@ -105,6 +185,7 @@ export async function transcribeWav(wavBuffer) {
 
 // Muse Image: edit the customer's own photo into an "after" preview. Returns a data URL or null.
 export async function museImageEdit({ dataUrl, prompt }) {
+  spend();
   const res = await fetch(`${BASE_URL}/images/edits`, {
     method: 'POST',
     headers: { ...relayHeaders(), Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' },
@@ -121,6 +202,7 @@ export async function museImageEdit({ dataUrl, prompt }) {
 // Live calls: open a realtime transcription session for one caller. The key stays on the server;
 // the browser streams 24 kHz 16-bit mono PCM to us and we relay it.
 export async function openRealtimeTranscription({ onEvent, onClose, mode = 'ENDPOINTING' }) {
+  spend();
   const { default: WebSocket } = await import('ws');
   const url = `${DIRECT_URL.replace(/^http/, 'ws')}/asr/realtime?sessionId=fa-${Date.now()}`;
   const ws = new WebSocket(url);

@@ -9,40 +9,69 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { business } from './business.js';
+import { business, sightBusiness, businessById, ALL_BUSINESSES } from './business.js';
 import * as engine from './engine.js';
 import { handleMessage, addNote, getThread } from './agent.js';
 import { quoteFromPhoto, photoReply } from './photo.js';
-import { measureAnything } from './anything.js';
+import { measureAnything, stepDetail, friendlyError, faceEnabled } from './anything.js';
 import { readExif } from './distance.js';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
+import { rateLimiter, tokenOk, redactSnapshot, metaBudgetGate, clientIp, photoLedger, DAILY_CAP_MESSAGE } from './guard.js';
+import { MAX_PHOTOS } from './floor.js';
 import { hasKey, transcribeWav, openRealtimeTranscription, SPARK, BASE_URL, DIRECT_URL, RELAY_URL, relayHeaders } from './muse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const app = express();
-app.use(express.json({ limit: '12mb' }));
+app.use(express.json({ limit: '16mb' })); // up to 4 photos of a floor at 1600 px, base64
+// A body that is too big or not JSON gets a plain JSON answer, never Express's HTML page with a stack trace.
+app.use((err, req, res, next) => {
+  if (err?.type === 'entity.too.large') return res.status(413).json({ ok: false, retry: false, ask: 'Those photos are too big to send together; try fewer at once.' });
+  if (err?.type === 'entity.parse.failed' || err?.status === 400) return res.status(400).json({ ok: false, retry: false, ask: 'Couldn’t read that request.' });
+  next(err);
+});
 app.use(express.static(path.join(__dirname, '..', 'public')));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 32 * 1024 * 1024 } });
 
 // ---- owner live feed (server-sent events) ----
+// The owner board is public in the demo, so by default it shows redacted leads (no phone numbers,
+// addresses or voicemail text). With OWNER_TOKEN set, the board sends the key in the x-owner-key
+// header (opened as /owner.html#key=<token>; the fragment never reaches the server or its logs).
+// Keys in the query string are ignored: URLs end up in logs and browser history.
+// The event stream only says *that* something happened; the board then re-reads /api/owner/feed.
+const ownerKey = (req) => req.get('x-owner-key');
+const isOwner = (req) => tokenOk(ownerKey(req), process.env.OWNER_TOKEN);
+const ownerView = (req) => (isOwner(req) ? engine.snapshot() : redactSnapshot(engine.snapshot()));
 const listeners = new Set();
-export function broadcast(kind, data) {
-  const msg = `event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`;
+export function broadcast(kind, data = {}) {
+  const msg = `event: ${kind}\ndata: ${JSON.stringify({ kind, leadId: data.leadId || null, at: new Date().toISOString() })}\n\n`;
   for (const res of listeners) res.write(msg);
 }
 app.get('/api/events', (req, res) => {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
   res.flushHeaders();
-  res.write(`event: hello\ndata: ${JSON.stringify(engine.snapshot())}\n\n`);
+  res.write(`event: hello\ndata: ${JSON.stringify({ kind: 'hello', at: new Date().toISOString() })}\n\n`);
   listeners.add(res);
   req.on('close', () => listeners.delete(res));
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, business: business.name, mode: hasKey() ? 'muse' : 'demo', model: hasKey() ? SPARK : 'scripted demo' });
+  res.json({ ok: true, business: business.name, mode: hasKey() ? 'muse' : 'demo', model: hasKey() ? SPARK : 'scripted demo', relay: RELAY_URL ? 'supabase' : 'direct' });
 });
-app.get('/api/business', (req, res) => res.json({ name: business.name, owner: business.owner, phone: business.phone, city: business.city }));
-app.get('/api/owner/feed', (req, res) => res.json(engine.snapshot()));
+// ?b=<id> names one of the demo businesses (Sight sends each job to the business that does it).
+app.get('/api/business', (req, res) => {
+  const b = (typeof req.query.b === 'string' && businessById(req.query.b)) || business;
+  res.json({ id: b.id, name: b.name, owner: b.owner, phone: b.phone || null, city: b.city, all: ALL_BUSINESSES.map((x) => ({ id: x.id, name: x.name, trade: x.trade || null })) });
+});
+app.get('/api/owner/feed', (req, res) => res.json({ ...ownerView(req), redacted: !isOwner(req) }));
+
+// Endpoints that spend Meta credits get a per-IP limit (in memory; one Render instance).
+export const measureLimit = rateLimiter({ max: Number(process.env.MEASURE_LIMIT) || 20, windowMs: 10 * 60 * 1000 });
+export const deskLimit = rateLimiter({ max: Number(process.env.DESK_LIMIT) || 60, windowMs: 10 * 60 * 1000, message: 'That’s a lot of messages in a few minutes. Give it a few minutes and try again.' });
+// /api/photo spends SAM and Muse Image per call: at least as strict as /api/measure.
+export const photoLimit = rateLimiter({ max: Math.min(Number(process.env.PHOTO_LIMIT) || 20, 20), windowMs: 10 * 60 * 1000 });
+// The global daily cap on Meta calls (META_DAILY_CAP): refuse up front when a request can't fit.
+const live = () => hasKey();
 
 function ensureLead(threadId, channel, phone, summary) {
   const t = getThread(threadId);
@@ -69,7 +98,7 @@ const safe = (fn) => async (req, res) => {
     await fn(req, res);
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'Something went wrong on our side. Try again in a moment.', detail: String(e.message).slice(0, 300) });
+    res.status(500).json({ error: 'Something went wrong on our side. Try again in a moment.', detail: friendlyError(e) });
   }
 };
 
@@ -78,7 +107,11 @@ const reqId = (r) => r.headers.get('x-request-id') || r.headers.get('request-id'
 const route = (r) => r.headers.get('x-route') || null;
 
 // Which models this key can reach (names only; the key is never returned).
+// Without the DIAG_TOKEN (header x-diag-token or ?token=) this is basic health only: the probes spend credits.
 app.get('/api/diag', safe(async (req, res) => {
+  if (!tokenOk(req.get('x-diag-token') || req.query.token, process.env.DIAG_TOKEN)) {
+    return res.json({ ok: true, mode: hasKey() ? 'muse' : 'demo', detail: 'basic health only; send the diag token for model probes' });
+  }
   if (!hasKey()) return res.json({ mode: 'demo' });
   // ?direct=1 skips the relay so the two paths can be compared.
   const direct = Boolean(req.query.direct) || !RELAY_URL;
@@ -103,7 +136,7 @@ app.get('/api/diag', safe(async (req, res) => {
 }));
 
 // ---- text ----
-app.post('/api/message', safe(async (req, res) => {
+app.post('/api/message', deskLimit, metaBudgetGate(6, live), safe(async (req, res) => {
   const { threadId, text, phone } = req.body || {};
   if (!threadId || !text) return res.status(400).json({ error: 'threadId and text are required' });
   ensureLead(threadId, 'text', phone, text.slice(0, 140));
@@ -113,7 +146,7 @@ app.post('/api/message', safe(async (req, res) => {
 }));
 
 // ---- photo ----
-app.post('/api/photo', safe(async (req, res) => {
+app.post('/api/photo', photoLimit, metaBudgetGate(5, live), safe(async (req, res) => {
   const { threadId, dataUrl, text = '', phone } = req.body || {};
   if (!threadId || !/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ error: 'threadId and a PNG, JPEG or WebP photo are required' });
   const t = ensureLead(threadId, 'photo', phone, 'Sent a photo');
@@ -141,35 +174,205 @@ app.post('/api/photo', safe(async (req, res) => {
 }));
 
 // ---- measure anything: one photo + one line of text ----
-app.post('/api/measure', safe(async (req, res) => {
-  const { dataUrl, text = '', exifB64 = '' } = req.body || {};
-  if (!/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ ok: false, ask: 'Send a PNG, JPEG or WebP photo.' });
-  let focal35 = null;
-  try { if (exifB64) focal35 = readExif(Buffer.from(exifB64, 'base64')).focal35 || null; } catch {}
-  const r = await measureAnything({ dataUrl, text: String(text).slice(0, 500), focal35 });
-  broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
-  res.json({ ...r, pipeline: r.pipeline.map((s) => ({ model: s.model, step: s.step, failed: Boolean(s.error) })), lens: focal35 ? 'from photo' : 'typical phone' });
+// What the page sees of each step: which model, what it did, how long, and its real numbers
+// (SAM's outline counts and confidence, Spark's read, our math's result) as one readable line.
+const publicStep = (s) => ({ model: s.model, step: s.step, failed: Boolean(s.error), ms: s.ms ?? null, detail: stepDetail(s), objects: s.result?.objects || undefined });
+// While measuring, the progress lines say only which step finished: a number our math found may still
+// be withheld if Spark's check disagrees, so step details arrive with the final result only.
+const progressStep = (s) => ({ model: s.model, step: s.step, failed: Boolean(s.error), ms: s.ms ?? null });
+
+// Errors in words a person can act on.
+export function measureErrorMessage(e) {
+  const m = String(e?.message || e || '');
+  if (e?.name === 'MetaBudgetError' || /daily limit/i.test(m)) return DAILY_CAP_MESSAGE;
+  if (/SAM \d|sam-3/i.test(m)) return 'Couldn’t reach Meta SAM 3.1 just now; tap Retry.';
+  if (/timed? ?out|timeout|aborted|ETIMEDOUT/i.test(m)) return 'The Meta models took too long to answer; tap Retry.';
+  if (/fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|network|socket/i.test(m)) return 'Couldn’t reach the Meta models; tap Retry.';
+  if (/\b(401|403)\b|api key|unauthori[sz]ed/i.test(m)) return 'The Meta models turned this server away just now. We’re on it; try again in a few minutes.';
+  if (/\b429\b|rate limit/i.test(m)) return 'The Meta models are busy right now; wait a moment and tap Retry.';
+  if (/\b5\d\d\b/.test(m)) return 'The Meta models had a hiccup; tap Retry.';
+  return 'Something went wrong measuring that photo; tap Retry.';
+}
+
+// ---- the hand-off: a measured job goes to the business's owner board as a lead ----
+// Each answer with a business block is remembered for a while under a random id. The customer's
+// "Send this to <business>" button posts only that id (and an optional phone number), so what lands
+// on the owner board is exactly what Sight measured, never text typed into the request.
+const HANDOFF_TTL_MS = 2 * 60 * 60 * 1000;
+const HANDOFF_MAX = 5000; // with 20 photos per 10 minutes per IP, plenty; only expired answers are dropped first
+const handoffs = new Map(); // id -> { at, leadId, ... } in the order they were made
+export function rememberHandoff(r, now = Date.now()) {
+  if (!r?.ok || !r.business?.job) return null;
+  for (const [k, v] of handoffs) { if (now - v.at > HANDOFF_TTL_MS) handoffs.delete(k); else break; }
+  while (handoffs.size >= HANDOFF_MAX) handoffs.delete(handoffs.keys().next().value);
+  const id = crypto.randomBytes(12).toString('base64url');
+  // Each job goes to the demo business that does it, priced from that business's own demo price list.
+  const biz = sightBusiness(r.task);
+  const priced = engine.sightQuote({ task: r.task, r });
+  const block = { ...r.business, quote: priced ? priced.line : r.business.quote, priced: Boolean(priced), demoPrices: true };
+  // checked: 'agreed' when Muse Spark confirmed SAM's outlines; 'skipped' when its check didn't come back.
+  // thumb: a small copy of the photo with SAM's masks drawn on it (owner key only on the board).
+  const chk = (r.pipeline || []).filter((p) => /check SAM/.test(p.step) && p.result?.outlines).at(-1);
+  const spark = chk ? { verdict: chk.result.check, seen: chk.result.outlines.map((o) => ({ color: o.color, seen: o.seen })), corrected: Boolean(r.corrected) } : null;
+  handoffs.set(id, { at: now, leadId: null, phoneSet: false, thumb: typeof r.thumb === 'string' && r.thumb.length < 400_000 ? r.thumb : null, spark, biz: { id: biz.id, name: biz.name, owner: biz.owner, trade: biz.trade || null }, task: r.task, headline: r.en?.headline || r.headline, measuredAgainst: r.en?.measuredAgainst || r.measuredAgainst || null, confidence: r.confidence || null, checked: r.checked || 'skipped', block, priced });
+  return { id, to: biz.name, owner: biz.owner, business: biz.id, block };
+}
+
+// A US phone number: 10 digits, or 11 starting with 1. Anything else (arrays, objects, 7 or 15 digits) is refused.
+export function phoneDigits(phone) {
+  if (phone == null || phone === '') return { ok: true, digits: '' };
+  if (typeof phone !== 'string' || phone.length > 30) return { ok: false };
+  const d = phone.replace(/\D/g, '');
+  if (d.length === 10) return { ok: true, digits: d };
+  if (d.length === 11 && d[0] === '1') return { ok: true, digits: d.slice(1) };
+  return { ok: false };
+}
+
+app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
+  const { id, phone, lang } = req.body || {};
+  const esp = lang === 'es';
+  const h = typeof id === 'string' ? handoffs.get(id) : null;
+  if (!h || Date.now() - h.at > HANDOFF_TTL_MS) return res.status(404).json({ ok: false, ask: esp ? 'Esa respuesta ya venció. Manda la foto otra vez y toca Enviar.' : 'That answer has expired. Send the photo again and tap Send.' });
+  const p = phoneDigits(phone);
+  if (!p.ok) return res.status(400).json({ ok: false, ask: esp ? 'Ese número no se ve bien. Déjalo en blanco o escribe los 10 dígitos.' : 'That phone number doesn’t look right. Leave it blank or type all 10 digits.' });
+  const digits = p.digits;
+  // The phone number is set once; after that it is locked (so a sent lead can't be pointed at someone else).
+  if (h.leadId && digits && h.phoneSet) return res.status(409).json({ ok: false, ask: esp ? 'Este trabajo ya está en el tablero con un teléfono. Llama al negocio para cambiarlo.' : 'This job is already on the board with a phone number. Call the business to change it.' });
+  if (!h.leadId) {
+    const lead = engine.addLead({ channel: 'sight', phone: digits || null, summary: `Sight photo: ${h.headline}`, quote: h.priced ? { serviceName: h.priced.serviceName, detail: h.priced.detail, total: h.priced.total } : null });
+    engine.updateLead(lead.id, { business: h.biz, photo: h.thumb, sight: { task: h.task, headline: h.headline, job: h.block.job, materials: h.block.materials || [], quote: h.block.quote, measuredAgainst: h.measuredAgainst, confidence: h.confidence, priced: h.block.priced, checked: h.checked, spark: h.spark, hasPhoto: Boolean(h.thumb) } });
+    h.leadId = lead.id;
+    h.phoneSet = Boolean(digits);
+    broadcast('lead', lead);
+  } else if (digits) {
+    engine.updateLead(h.leadId, { phone: digits });
+    h.phoneSet = true;
+    broadcast('lead', { leadId: h.leadId });
+  }
+  const masked = digits ? `•••-•••-${digits.slice(-4)}` : null;
+  res.json({
+    ok: true,
+    leadId: h.leadId,
+    to: h.biz.name,
+    owner: h.biz.owner,
+    business: h.biz.id,
+    board: `/owner.html?b=${encodeURIComponent(h.biz.id)}`,
+    message: esp
+      ? `Enviado a ${h.biz.name.replace(/\.$/, '')}. Ya está en el tablero de ${h.biz.owner}${masked ? ` y te escribirán al ${masked}` : '; agrega tu número si quieres que te escriban'}.`
+      : `Sent to ${h.biz.name.replace(/\.$/, '')}. It’s on ${h.biz.owner}’s board now${masked ? `, and they’ll text you at ${masked}` : '; add your number if you want them to text you back'}.`,
+  });
 }));
 
-// Sample photos for the demo chips (public/samples/*.jpg with a matching .txt message), if present.
-app.get('/api/measure/samples', (req, res) => {
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'samples');
+// The photos in a /api/measure request: `dataUrl` (one photo, as always) or `dataUrls` (1 to 4 photos of
+// one floor with the same sheet of paper in every shot). The first of dataUrls is the photo for everything else.
+const IMAGE_URL = /^data:image\/(png|jpe?g|webp);base64,/;
+export function photosOf(body) {
+  const list = Array.isArray(body?.dataUrls) ? body.dataUrls : [];
+  const urls = list.length ? list : body?.dataUrl ? [body.dataUrl] : [];
+  return urls.map((u) => (typeof u === 'string' ? u : ''));
+}
+// Every photo counts against the per-IP limit, once per 10 minutes: a floor conversation re-sends its
+// earlier photos with each new one, and those are not charged again (photoLedger, by content). A request
+// that is not even photos is refused before it costs anything.
+export const photosSeen = photoLedger({ windowMs: 10 * 60 * 1000, cap: 64 });
+const LIMIT_MSG = 'That’s a lot of photos in a few minutes. Give it about 10 minutes and try again.';
+const photosLimit = (req, res, next) => {
+  const urls = photosOf(req.body);
+  const n = urls.length;
+  if (n > MAX_PHOTOS) return res.status(400).json({ ok: false, ask: `Send up to ${MAX_PHOTOS} photos of the floor.` });
+  if (!n || !urls.every((u) => IMAGE_URL.test(u))) return res.status(400).json({ ok: false, ask: n > 1 ? 'Every photo must be a PNG, JPEG or WebP.' : 'Send a PNG, JPEG or WebP photo.' });
+  const ip = clientIp(req);
+  const fresh = photosSeen.unseen(ip, urls);
+  for (let i = 0; i < fresh; i++) {
+    const r = measureLimit.check(ip);
+    if (!r.ok) { res.set('Retry-After', String(r.retryAfterS)); return res.status(429).json({ ok: false, error: LIMIT_MSG, ask: LIMIT_MSG, retry: false, rateLimited: true }); }
+  }
+  next();
+};
+
+// Stand-in models for the server tests (test/floor.test.js): a deps object as measureAnything takes it.
+// Only honored when NODE_ENV is 'test' or no Meta key is set; with a key, the real models are always used.
+export const _testDeps = { current: null };
+const testDeps = () => (process.env.NODE_ENV === 'test' || !hasKey() ? _testDeps.current : null);
+
+// Up to 12 Meta calls per photo: read, 3 SAM outlines, check and wording, then one correction round (SAM
+// again, possibly twice, check and wording again). Every HTTP attempt is counted as it happens.
+export const CALLS_PER_PHOTO = 12;
+app.post('/api/measure', photosLimit, metaBudgetGate((req) => CALLS_PER_PHOTO * Math.max(1, photosOf(req.body).length), live), async (req, res) => {
+  const { text = '', exifB64 = '' } = req.body || {};
+  const dataUrls = photosOf(req.body);
+  const dataUrl = dataUrls[0];
+  if (!dataUrls.length || !dataUrls.every((u) => IMAGE_URL.test(u))) return res.status(400).json({ ok: false, ask: dataUrls.length > 1 ? 'Every photo must be a PNG, JPEG or WebP.' : 'Send a PNG, JPEG or WebP photo.' });
+  let focal35 = null;
+  try { if (exifB64) focal35 = readExif(Buffer.from(exifB64, 'base64')).focal35 || null; } catch {}
+  // Streaming (Accept: application/x-ndjson): one line per finished step, then the result, so the page's
+  // waiting steps follow real progress. Otherwise a single JSON reply.
+  const stream = /application\/x-ndjson/.test(req.get('accept') || '');
+  const line = (o) => res.write(`${JSON.stringify(o)}\n`);
+  if (stream) {
+    res.status(200).set({ 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no' });
+    res.flushHeaders();
+    line({ type: 'start' });
+  }
   try {
-    const out = fs.readdirSync(dir).filter((f) => /\.(jpe?g|png)$/i.test(f)).map((f) => {
-      const id = f.replace(/\.\w+$/, '');
+    const r = await measureAnything({ dataUrl, dataUrls: dataUrls.length > 1 ? dataUrls : null, text: String(text).slice(0, 500), focal35, deps: testDeps(), onStep: stream ? (s) => line({ type: 'step', ...progressStep(s) }) : null });
+    broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
+    const handoff = rememberHandoff(r);
+    const { thumb, ...rest } = r; // the owner board's copy of the photo stays on the server
+    const out = { ...rest, business: handoff ? handoff.block : r.business, handoff: handoff ? { id: handoff.id, to: handoff.to, owner: handoff.owner, business: handoff.business } : null, pipeline: r.pipeline.map(publicStep), lens: focal35 ? 'from photo' : 'typical phone' };
+    if (stream) { line({ type: 'result', ...out }); res.end(); } else res.json(out);
+  } catch (e) {
+    console.error(e);
+    const ask = measureErrorMessage(e);
+    const retry = ask !== DAILY_CAP_MESSAGE;
+    if (stream) { line({ type: 'error', ok: false, retry, ask }); res.end(); } else res.status(502).json({ ok: false, retry, ask, error: ask });
+  }
+});
+
+// Sample photos for the demo chips: public/samples/<id>.jpg (or .png/.webp) with <id>.txt beside it
+// (first line: chip label, the rest: the message sent with the photo). Only the list comes from here;
+// the photos are plain static files under /samples/, fetched when a chip is tapped.
+export const SAMPLES_DIR = path.join(__dirname, '..', 'public', 'samples');
+// A chip can have several photos: <id>.jpg, <id>-2.jpg, <id>-3.jpg ... are one sample (a floor from several
+// doorways); `urls` lists them in order and `url` is the first, as before.
+export function listSamples(dir = SAMPLES_DIR) {
+  try {
+    const files = fs.readdirSync(dir).filter((f) => /^[a-z0-9_]+(?:-\d+)?\.(jpe?g|png|webp)$/i.test(f) && (faceEnabled() || !/^face\b/i.test(f))).sort();
+    const byId = new Map();
+    for (const f of files) {
+      const m = f.match(/^([a-z0-9_]+)(?:-(\d+))?\.\w+$/i);
+      const id = m[1], n = m[2] ? Number(m[2]) : 1;
+      if (!byId.has(id)) byId.set(id, []);
+      byId.get(id).push({ n, url: `/samples/${encodeURIComponent(f)}` });
+    }
+    return [...byId.entries()].map(([id, list]) => {
+      const urls = list.sort((a, b) => a.n - b.n).map((x) => x.url);
       const txtFile = path.join(dir, `${id}.txt`);
-      const [label, ...rest] = (fs.existsSync(txtFile) ? fs.readFileSync(txtFile, 'utf8') : id).split('\n');
-      const mime = /png$/i.test(f) ? 'image/png' : 'image/jpeg';
-      return { id, label: label.trim(), text: rest.join('\n').trim(), dataUrl: `data:${mime};base64,${fs.readFileSync(path.join(dir, f)).toString('base64')}` };
+      const [label, ...rest] = (fs.existsSync(txtFile) ? fs.readFileSync(txtFile, 'utf8') : id).split(/\r?\n/);
+      return { id, label: label.trim(), text: rest.join('\n').trim(), url: urls[0], urls };
     });
-    res.json(out);
-  } catch { res.json([]); }
+  } catch {
+    return [];
+  }
+}
+app.get('/api/measure/samples', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.json(listSamples());
 });
 
 // ---- voicemail ----
+// Length of a PCM WAV in seconds, from its header (for the public board's "Voicemail lead · 0:42").
+export function wavSeconds(buf) {
+  try {
+    if (!buf || buf.length < 44 || buf.toString('ascii', 0, 4) !== 'RIFF') return null;
+    const channels = buf.readUInt16LE(22), rate = buf.readUInt32LE(24), bits = buf.readUInt16LE(34);
+    const bytesPerSec = rate * channels * (bits / 8);
+    return bytesPerSec > 0 ? Math.round((buf.length - 44) / bytesPerSec) : null;
+  } catch { return null; }
+}
 const DEMO_VOICEMAIL = "Hi, this is Marcus over on Belmont Boulevard. I've got a two-car driveway that's covered in oil stains and I want it pressure washed before my daughter's party on the fifteenth. Call or text me back. Thanks.";
 
-app.post('/api/voicemail', upload.single('audio'), safe(async (req, res) => {
+app.post('/api/voicemail', deskLimit, metaBudgetGate(7, live), upload.single('audio'), safe(async (req, res) => {
   const { threadId, phone } = req.body || {};
   if (!threadId) return res.status(400).json({ error: 'threadId is required' });
   let transcript;
@@ -180,7 +383,7 @@ app.post('/api/voicemail', upload.single('audio'), safe(async (req, res) => {
     transcript = DEMO_VOICEMAIL;
   }
   const t = ensureLead(threadId, 'voicemail', phone, transcript.slice(0, 140));
-  engine.updateLead(t.ctx.leadId, { transcript });
+  engine.updateLead(t.ctx.leadId, { transcript, durationS: wavSeconds(req.file?.buffer) });
   broadcast('voicemail', { threadId, leadId: t.ctx.leadId, transcript });
   // The voicemail becomes the first customer message; the agent texts back from it.
   const r = await handleMessage({ threadId, text: `[VOICEMAIL from ${phone || 'unknown number'}] ${transcript}\n(Reply by text. Answer what they asked and move toward a booking.)` });
@@ -215,14 +418,14 @@ export function attachLive(server) {
               const r = await handleMessage({ threadId, text: `[LIVE CALL, spoken] ${said}`, phone });
               afterTurn(threadId, r);
               send({ type: 'reply', text: r.reply, tools: r.tools.map((x) => x.name) });
-            }).catch((e) => send({ type: 'error', message: String(e.message).slice(0, 200) }));
+            }).catch((e) => send({ type: 'error', message: `Something went wrong: ${friendlyError(e)}.` }));
           }
           if (ev.type === 'error') send({ type: 'error', message: ev.message });
         },
         onClose: () => send({ type: 'closed' }),
       });
     } catch (e) {
-      send({ type: 'error', message: `Could not reach Muse Voice Transcribe: ${String(e.message).slice(0, 200)}` });
+      send({ type: 'error', message: `Could not reach Muse Voice Transcribe: ${friendlyError(e)}.` });
       return sock.close();
     }
     send({ type: 'ready', threadId });

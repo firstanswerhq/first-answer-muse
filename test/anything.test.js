@@ -80,15 +80,23 @@ test('will a 12 ft shed fit between the fence and the house? (13.5 ft gap)', asy
   assert.match(r.answer, /12 ft wide one fits/);
 });
 
-test('a floor that runs off the photo is flagged, not trusted', async () => {
+test('a floor that runs off the photo is a partial: what was seen so far, and a request for more photos', async () => {
   const cam = camera({ tiltDeg: 35, D: 2500, f: 1100, panDeg: 5 });
   const floor = rectShape(0, 0, 3658, 3048, 0), paper = rectShape(-100, 150, 279.4, 215.9, 15);
   const r = await measureAnything({
     dataUrl: 'x', text: 'tile for this floor',
     deps: deps(R({ task: 'floor_tile', target: 'floor', ruler: 'paper_letter' }), { floor: samSeg(cam, floor.inside, floor.boundary), 'sheet of paper': samSeg(cam, paper.inside, paper.boundary) }),
   });
-  assert.equal(r.confidence, 'low');
-  assert.match(r.ask, /step back/);
+  assert.equal(r.ok, true, r.ask);
+  assert.equal(r.partial, true);
+  assert.equal(r.wantMore, true);
+  assert.match(r.headline, /^About \d+ sq ft so far$/);
+  assert.match(r.answer, /^I can see part of the floor: about \d+ sq ft so far\. Send one or two more photos from another doorway or corner, and leave the sheet of paper where it is, so I can measure the whole room\.$/);
+  assert.equal(r.business, null);
+  assert.deepEqual(r.shopping, []);
+  assert.ok(!r.numbers.some((n) => /tiles|Buy|Floor/.test(n.label)));
+  assert.equal(r.numbers[0].label, 'Seen so far');
+  assert.ok(parseFloat(r.numbers[0].value) < 120);
 });
 
 test('no ruler in the shot: it asks for one, plainly', async () => {
@@ -134,4 +142,49 @@ test('coins from other countries are named and sized', async () => {
   assert.equal(coinFromText('quarter'), 'quarter');
   assert.equal(FLAT_REFERENCES.loonie.diameter, 26.5);
   assert.ok(FLAT_REFERENCES.ca_quarter.diameter < FLAT_REFERENCES.quarter.diameter);
+});
+
+test('a ± range never rounds an end onto the measured value', async () => {
+  const { rangeIn } = await import('../src/anything.js');
+  // 0.5625 in ± 4%: sixteenths would give "0.5 in – 0.56 in".
+  const mm = 0.5625 * 25.4;
+  const r = rangeIn(mm, mm * 0.04);
+  assert.equal(r, '0.54 in – 0.59 in');
+  assert.equal(rangeIn(254, 254 * 0.03), '9.75 in – 10.25 in');
+});
+
+test('face measuring is off by default: a polite "not available", no SAM call', async () => {
+  delete process.env.SIGHT_FACE;
+  let samCalls = 0;
+  const r = await measureAnything({ dataUrl: 'x', text: 'Gift card on my forehead, measure my eye spacing', deps: { read: async () => ({ task: 'face', target: 'face', second_target: '', ruler: 'card', item_width_in: 0, tile_w_in: 0, tile_l_in: 0, shoe_for: 'unknown', language: 'en', summary: '' }), segment: async () => { samCalls++; return { objects: [], frame: null }; } } });
+  assert.equal(r.ok, false);
+  assert.equal(r.unavailable, 'face');
+  assert.match(r.ask, /isn’t available here/);
+  assert.equal(samCalls, 0);
+  // Without a key too (text only).
+  const t = await measureAnything({ dataUrl: 'x', text: 'measure my pupillary distance' });
+  assert.equal(t.unavailable, 'face');
+});
+
+test('the face sample is hidden from the chip list unless SIGHT_FACE=1', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const { listSamples } = await import('../src/server.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'samples-'));
+  for (const id of ['face', 'tile']) { fs.writeFileSync(path.join(dir, `${id}.jpg`), 'x'); fs.writeFileSync(path.join(dir, `${id}.txt`), `${id}\nmsg`); }
+  delete process.env.SIGHT_FACE;
+  assert.deepEqual(listSamples(dir).map((s) => s.id), ['tile']);
+  process.env.SIGHT_FACE = '1';
+  assert.deepEqual(listSamples(dir).map((s) => s.id), ['face', 'tile']);
+  delete process.env.SIGHT_FACE;
+});
+
+test('shoe size: an 11 in foot is US 11 men’s by the chart, and the steps say some brands run small', async () => {
+  const s = shoeSize(11 * 25.4, 'men');
+  assert.equal(s.men, 11);
+  const cam = camera({ tiltDeg: 15, D: 900, f: 1100 });
+  const paper = rectShape(0, 0, 279.4, 215.9, 90), foot = ellipseShape(0, 0, 50, 139.7); // 11 in foot
+  const r = await measureAnything({ dataUrl: 'x', text: 'what shoe size am I? (men)', deps: deps(R({ task: 'shoe_size', target: 'foot', ruler: 'paper_letter', shoe_for: 'men' }), { foot: samSeg(cam, foot.inside, foot.boundary), 'sheet of paper': samSeg(cam, paper.inside, paper.boundary) }) });
+  assert.equal(r.ok, true, r.ask);
+  assert.match(r.headline, /^Size 1[01](\.5)? men’s$/);
+  assert.ok(r.steps.includes('Brands vary: some, like Nike, often run small, so try a half to a full size up.'));
 });

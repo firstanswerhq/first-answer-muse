@@ -16,6 +16,7 @@
     <div>
       <h1><span class="m-word">First Answer</span>Sight</h1>
       <p class="m-sub">See it. Size it. Solve it. Text one photo, get the measurement, what to buy, and what to do.</p>
+      <p class="m-biz">For local service businesses: a customer texts a photo, gets the answer, and one tap sends you the job size, materials and a quote line from your price list.</p>
     </div>
     <div class="m-powered" aria-label="Runs on Meta AI"><span class="c-spark">Meta Muse Spark</span><span class="c-sam">Meta SAM 3.1</span></div>
   </div>
@@ -38,9 +39,13 @@
     <div class="m-thread" id="thread" aria-live="polite"></div>
 
     <div class="m-staged hidden" id="staged">
-      <img id="stagedImg" alt="Photo ready to send">
-      <span>Photo ready. Add a question and tap Send.</span>
-      <button type="button" id="unstage" aria-label="Remove photo">&times;</button>
+      <div class="m-thumbs" id="stagedThumbs" aria-label="Photos ready to send"></div>
+      <div class="m-staged-text">
+        <span id="stagedMsg">Photo ready. Add a question and tap Send.</span>
+        <button type="button" class="m-add hidden" id="addPhoto">Add another photo of the same floor</button>
+        <small class="m-add-tip hidden" id="addTip">Leave the sheet of paper where it is and shoot the floor from another doorway or corner.</small>
+      </div>
+      <button type="button" id="unstage" aria-label="Remove photos">&times;</button>
     </div>
 
     <form class="m-compose" id="compose">
@@ -53,6 +58,7 @@
       <button class="m-send" type="submit" id="sendBtn">Send</button>
     </form>
   </section>
+  <p class="m-privacy" id="privacy"><b>Privacy.</b> <span id="privacyRoute">Your photo(s) and message go from our server to Meta’s Muse Spark and SAM 3.1, through First Answer’s relay (a Supabase function that passes them straight on and stores nothing)</span>, only to answer you. Nothing is written to disk. The answer is kept in memory for 2 hours so you can tap Send. If you send it, the job, your phone number (if you add one) and a small copy of the first photo with SAM’s outlines go on that business’s board, in memory, until the demo server restarts.</p>
 </main>
 
 <script type="module" src="measure.js"></script>
