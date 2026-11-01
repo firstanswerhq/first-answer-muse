@@ -642,7 +642,7 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
 
 // The tile answer from a room's sides in inches: tiles to buy, layout, cut list. photos > 1 when the room
 // was combined from several photos on the paper's plane (floorMultiFlow).
-function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], photos = 1, floorSqft = null, ...base }) {
+function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], photos = 1, floorSqft = null, other = null, ...base }) {
   const tw = read.tile_w_in || 12, tl = read.tile_l_in || read.tile_w_in || 12;
   const p = tilePlan({ roomW, roomL, tileW: tw, tileL: tl });
   // floorSqft: the floor is not a plain rectangle (a vanity, tub or toilet takes a bite), so the floor to
@@ -650,10 +650,15 @@ function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], 
   // layout and cut list still come from the rectangle (the walls), and the steps say so.
   const open = floorSqft != null && floorSqft < p.room.sqft;
   const sqft = open ? Math.round(floorSqft * 10) / 10 : p.room.sqft;
-  const tilesForFloor = open ? Math.ceil((sqft * 144) / (tw * tl)) : p.tilesForFloor;
+  // Tiles laid scale the plan's count (full tiles plus one per cut piece) by the open share of the
+  // rectangle, so the count and the cut list under it agree.
+  const tilesForFloor = open ? Math.ceil(p.tilesForFloor * (sqft / p.room.sqft)) : p.tilesForFloor;
   const buyTiles = open ? Math.ceil(tilesForFloor * (1 + p.extraPct / 100)) : p.buyTiles;
   base.pipeline.add({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles, cuts: p.cuts?.length, ...(open ? { openFloorSqft: sqft } : {}) } });
   const pmPct = Math.round(plusMinusPct * 100);
+  // The other reading of the half turn (see combineFloors): the range spans both readings' areas.
+  const otherSqft = other ? (open ? other.areaMm2 / 92903.04 : (other.widthMm * other.lengthMm) / 92903.04) : null;
+  const lo = Math.round(Math.min(sqft, otherSqft ?? sqft) * (1 - 2 * plusMinusPct)), hi = Math.round(Math.max(sqft, otherSqft ?? sqft) * (1 + 2 * plusMinusPct));
   const room = `${ftIn(roomW / 12)} by ${ftIn(roomL / 12)}`;
   const first = open
     ? `Combined from ${photos} photos: the room is about ${room}; the floor to tile is ${sqft} sq ft (the floor isn’t a plain rectangle: a vanity, tub or toilet takes up part of it).`
@@ -670,11 +675,11 @@ function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], 
     job: { sqft },
     answer: `${first} In ${tw} × ${tl} in tile that’s ${tilesForFloor} tiles laid, plus ${p.extraPct}% extra for cuts and mistakes: buy ${buyTiles} tiles.${next}`,
     photos, wantMore: photos > 1 && photos < MAX_PHOTOS, openFloor: open || undefined,
-    numbers: [{ label: open ? 'Room' : 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: open ? 'Floor to tile' : 'Area', value: `${sqft} sq ft` }, { label: 'Range', value: `${Math.round(sqft * (1 - 2 * plusMinusPct))} – ${Math.round(sqft * (1 + 2 * plusMinusPct))} sq ft (±${2 * pmPct}%)` }, ...(photos > 1 ? [{ label: 'Photos', value: `${photos} photos` }] : []), ...(open ? [] : [{ label: 'Full tiles', value: String(p.fullTiles) }]), { label: 'Buy', value: `${buyTiles} tiles (+${p.extraPct}%)` }],
+    numbers: [{ label: open ? 'Room' : 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: open ? 'Floor to tile' : 'Area', value: `${sqft} sq ft` }, { label: 'Range', value: other ? `${lo} – ${hi} sq ft` : `${lo} – ${hi} sq ft (±${2 * pmPct}%)` }, ...(photos > 1 ? [{ label: 'Photos', value: `${photos} photos` }] : []), ...(open ? [] : [{ label: 'Full tiles', value: String(p.fullTiles) }]), { label: 'Buy', value: `${buyTiles} tiles (+${p.extraPct}%)` }],
     shopping: [`${buyTiles} tiles, ${tw} × ${tl} in (same lot number on every box)`, 'Thinset mortar and a notched trowel (ask the store which notch fits your tile)', 'Grout and 1/8 in spacers', 'Tile cutter or wet saw'],
     steps: [`Start at the center of the room: ${p.layout.across} across, ${p.layout.along} along.`, ...p.cuts.map((c) => `${c.count} × ${c.what}: ${c.cut}.`), ...(open ? ['The cut list is for the open floor; fixtures take their own cuts.'] : []), 'Tape-measure one wall before the first cut.'],
-    confidence: confidence === 'good' ? 'fair' : confidence,
-    ask: [...notes, photos > 1 ? `Combined from ${photos} photos — check one wall with a tape before cutting.` : 'Measured from one photo — check one wall with a tape before cutting.'].join(' '),
+    confidence: other ? 'low' : confidence === 'good' ? 'fair' : confidence,
+    ask: [...notes, ...(other ? [TWO_ENDS_NOTE] : []), photos > 1 ? `Combined from ${photos} photos — check one wall with a tape before cutting.` : 'Measured from one photo — check one wall with a tape before cutting.'].join(' '),
   });
 }
 
@@ -683,10 +688,13 @@ function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], 
 export const ASK_MORE = 'Send one or two more photos from another doorway or corner, and leave the sheet of paper where it is, so I can measure the whole room.';
 export const NEXT_OR_SEND = 'Send one more if a corner is still missing, or tap Send to the business.';
 export const AT_LIMIT = 'That’s the limit of 4 photos; tap Send to the business.';
+export const AT_LIMIT_PARTIAL = 'That’s the limit of 4 photos; tap Start over and shoot the floor again with the sheet where every photo can see it.';
+export const OPEN_SIDE_ASK = 'Send a photo from the end of the room the others didn’t reach, with the sheet in the shot, and leave the sheet where it is.';
+export const TWO_ENDS_NOTE = 'Two photos from opposite ends can’t always tell which way is which; a third photo from a side wall settles it.';
 
 // One photo that shows only part of the floor (it runs off the photo's edge): the area seen so far, no
 // tiles and no job yet, and a request for more photos.
-function partialFloorAnswer({ m, photos = 1, ...base }) {
+function partialFloorAnswer({ m, photos = 1, atLimit = false, ...base }) {
   const sqft = Math.round(m.areaMm2 / 92903.04);
   // The part seen is measured like any close-up; that it runs off the edge is the point here, not a flaw (measureFlat adds 8% for it).
   const pm = Math.max(0.03, Math.round((m.plusMinusPct - 0.08) * 1000) / 1000);
@@ -697,12 +705,12 @@ function partialFloorAnswer({ m, photos = 1, ...base }) {
   return finish({
     ...base,
     headline: `About ${sqft} sq ft so far`,
-    answer: `I can see part of the floor: about ${sqft} sq ft so far. ${ASK_MORE}`,
+    answer: `I can see part of the floor: about ${sqft} sq ft so far. ${atLimit ? AT_LIMIT_PARTIAL : ASK_MORE}`,
     numbers: [{ label: 'Seen so far', value: `${sqft} sq ft` }, { label: 'Range', value: `${Math.round(sqft * (1 - 2 * pm))} – ${Math.round(sqft * (1 + 2 * pm))} sq ft (±${2 * pmPct}%)` }],
     shopping: [], steps: [],
     confidence: 'fair',
     ask: notes.length ? notes.join(' ') : null,
-    partial: true, photos, wantMore: true,
+    partial: true, photos, wantMore: !atLimit,
   });
 }
 
@@ -804,7 +812,7 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
     const k = photos.indexOf(photos.reduce((a, b) => (b.mmPerPx < a.mmPerPx ? b : a)));
     const m = photos[k].measured;
     const r = m.clipped
-      ? partialFloorAnswer({ ...base, overlay: overlays[0], m, photos: 1 })
+      ? partialFloorAnswer({ ...base, overlay: overlays[0], m, photos: 1, atLimit: k2 >= MAX_PHOTOS })
       : tileAnswer({ ...base, overlay: overlays[0], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: Math.max(m.plusMinusPct, photos[k].plusMinusPct), confidence: m.confidence, notes: photos[k].notes });
     r.note = `The photos weren’t combined: ${why}. This answer is from photo ${photos[k].index + 1} alone. ${MULTI_PAPER_TIP}`;
     r.combined = { photos: k2, ok: false, from: photos[k].index + 1, fill: c.fill ?? null };
@@ -813,10 +821,27 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
     return withDrops(r);
   }
   const coverage = c.photos.map((p, i) => `photo ${photos[i].index + 1} ${Math.round(p.coverage * 100)}%`).join(', ');
-  pipeline.add({ model: 'first-answer math', step: `combine ${k2} photos on the ${R.label}’s plane`, result: { sqftSeen: c.sqft, widthFt: Math.round((c.widthMm / 304.8) * 10) / 10, lengthFt: Math.round((c.lengthMm / 304.8) * 10) / 10, fill: `${Math.round(c.fill * 100)}%${c.rectangle ? '' : ' (not a plain rectangle: the floor seen is the area)'}; photos overlap ${Math.round(c.pairOverlap * 100)}%`, coverage, turned: c.photos.filter((p) => p.flipped).length, plusMinusPct: c.plusMinusPct } });
+  pipeline.add({ model: 'first-answer math', step: `combine ${k2} photos on the ${R.label}’s plane`, result: { sqftSeen: c.sqft, widthFt: Math.round((c.widthMm / 304.8) * 10) / 10, lengthFt: Math.round((c.lengthMm / 304.8) * 10) / 10, fill: `${Math.round(c.fill * 100)}%${c.rectangle ? '' : ' (not a plain rectangle: the floor seen is the area)'}; photos overlap ${Math.round(c.pairOverlap * 100)}%${c.openSides.length ? `; no photo reaches the wall on ${c.openSides.length} side${c.openSides.length === 1 ? '' : 's'}` : ''}${c.ambiguous ? `; the other half-turn reads ${Math.round((c.ambiguous.widthMm / 304.8) * 10) / 10} × ${Math.round((c.ambiguous.lengthMm / 304.8) * 10) / 10} ft, ${c.ambiguous.sqft} sq ft` : ''}`, coverage, turned: c.photos.filter((p) => p.flipped).length, plusMinusPct: c.plusMinusPct } });
   const notes = [...new Set(photos.flatMap((p) => p.notes))];
-  const r = tileAnswer({ ...base, overlay: overlays[0], roomW: c.widthMm / 25.4, roomL: c.lengthMm / 25.4, plusMinusPct: c.plusMinusPct, confidence: photos.every((p) => p.confidence === 'good') ? 'good' : 'low', notes, photos: k2, floorSqft: c.rectangle ? null : c.areaMm2 / 92903.04 });
-  r.combined = { photos: k2, ok: true, sqft: c.sqft, fill: c.fill, rectangle: c.rectangle, pairOverlap: c.pairOverlap, coverage: c.photos.map((p) => p.coverage), turned: c.photos.map((p) => p.flipped) };
+  // No photo's frame reaches past the floor on some side: the floor just ran out of the photos there,
+  // so this is still a partial ("so far"), and the next photo should come from that end.
+  if (c.openSides.length) {
+    const sqft = Math.round(c.areaMm2 / 92903.04);
+    const pm = c.plusMinusPct, pmPct = Math.round(pm * 100);
+    const r = finish({
+      ...base, overlay: overlays[0],
+      headline: `About ${sqft} sq ft so far`,
+      answer: `I can see about ${sqft} sq ft of the floor so far, combined from ${k2} photos, but no photo shows where the floor ends on every side. ${k2 < MAX_PHOTOS ? OPEN_SIDE_ASK : AT_LIMIT_PARTIAL}`,
+      numbers: [{ label: 'Seen so far', value: `${sqft} sq ft` }, { label: 'Range', value: `${Math.round(sqft * (1 - 2 * pm))} – ${Math.round(sqft * (1 + 2 * pm))} sq ft (±${2 * pmPct}%)` }, { label: 'Photos', value: `${k2} photos` }],
+      shopping: [], steps: [], confidence: 'fair', ask: notes.length ? notes.join(' ') : null,
+      partial: true, photos: k2, wantMore: k2 < MAX_PHOTOS,
+    });
+    r.combined = { photos: k2, ok: true, sqft: c.sqft, fill: c.fill, openSides: c.openSides, coverage: c.photos.map((p) => p.coverage), turned: c.photos.map((p) => p.flipped) };
+    return withDrops(r);
+  }
+  const r = tileAnswer({ ...base, overlay: overlays[0], roomW: c.widthMm / 25.4, roomL: c.lengthMm / 25.4, plusMinusPct: c.plusMinusPct, confidence: photos.every((p) => p.confidence === 'good') ? 'good' : 'low', notes, photos: k2, floorSqft: c.rectangle ? null : c.areaMm2 / 92903.04, other: c.ambiguous });
+  r.combined = { photos: k2, ok: true, sqft: c.sqft, fill: c.fill, rectangle: c.rectangle, pairOverlap: c.pairOverlap, openSides: c.openSides, ambiguous: c.ambiguous ? { lengthFt: Math.round((c.ambiguous.lengthMm / 304.8) * 10) / 10, sqft: c.ambiguous.sqft } : null, coverage: c.photos.map((p) => p.coverage), turned: c.photos.map((p) => p.flipped) };
+
   return withDrops(r);
 }
 const NO_SHEET = 'I can’t line that one up without the paper. Send it again with the whole sheet in the shot (and leave the sheet where it is).';

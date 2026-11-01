@@ -56,6 +56,9 @@ const EXACT = {
   'I can’t line that one up without the paper. Send it again with the whole sheet in the shot (and leave the sheet where it is).': 'No puedo alinear esa sin la hoja. Mándala otra vez con la hoja completa en la foto (y deja la hoja donde está).',
   'I couldn’t find the floor in that one. Send it again with more of the floor and the whole sheet in the shot.': 'No encontré el piso en esa. Mándala otra vez con más piso y la hoja completa en la foto.',
   'Get closer to the sheet for that one and send it again.': 'Acércate a la hoja para esa y mándala otra vez.',
+  'That’s the limit of 4 photos; tap Start over and shoot the floor again with the sheet where every photo can see it.': 'Ese es el límite de 4 fotos; toca Empezar de nuevo y toma el piso otra vez con la hoja donde todas las fotos la vean.',
+  'Send a photo from the end of the room the others didn’t reach, with the sheet in the shot, and leave the sheet where it is.': 'Manda una foto desde el extremo del cuarto al que las otras no llegaron, con la hoja en la foto, y deja la hoja donde está.',
+  'Two photos from opposite ends can’t always tell which way is which; a third photo from a side wall settles it.': 'Dos fotos desde extremos opuestos no siempre distinguen cuál lado es cuál; una tercera foto desde una pared lateral lo resuelve.',
   Length: 'Largo', Width: 'Ancho', 'Long side': 'Lado largo', 'Short side': 'Lado corto', Accuracy: 'Precisión', Height: 'Altura', Distance: 'Distancia',
   // values
   '1 in (a quarter)': '1 pulg. (una moneda de un cuarto de dólar)',
@@ -153,6 +156,7 @@ const RULES = [
   [/^Combined from (\d+) photos: the room is about (.+?) by (.+?); the floor to tile is ([\d,.]+) sq ft \(the floor isn’t a plain rectangle: a vanity, tub or toilet takes up part of it\)\. In (.+?) × (.+?) in tile that’s (\d+) tiles laid, plus (\d+)% extra for cuts and mistakes: buy (\d+) tiles\.(?: (Send one more if a corner is still missing, or tap Send to the business\.|That’s the limit of 4 photos; tap Send to the business\.))?$/, (m) =>
     `Combinando ${m[1]} fotos: el cuarto mide unos ${units(m[2])} por ${units(m[3])}; el piso a enlosar es de ${m[4]} pies cuadrados (el piso no es un rectángulo simple: un lavabo, una tina o un inodoro ocupan parte). Con baldosas de ${m[5]} × ${m[6]} pulg. son ${m[7]} baldosas colocadas, más ${m[8]}% extra para cortes y errores: compra ${m[9]} baldosas.${m[10] ? ` ${es(m[10])}` : ''}`],
   [/^About (\d+) sq ft so far$/, (m) => `Unos ${m[1]} pies cuadrados por ahora`],
+  [/^I can see about (\d+) sq ft of the floor so far, combined from (\d+) photos, but no photo shows where the floor ends on every side\. (.+)$/, (m) => `Veo unos ${m[1]} pies cuadrados del piso por ahora, combinando ${m[2]} fotos, pero ninguna foto muestra dónde termina el piso por todos lados. ${es(m[3])}`],
   [/^I can see part of the floor: about (\d+) sq ft so far\. (.+)$/, (m) => `Veo parte del piso: unos ${m[1]} pies cuadrados por ahora. ${es(m[2])}`],
   [/^Photo (\d+): (.+)$/, (m, s) => (es(m[2]) === m[2] ? s : `Foto ${m[1]}: ${es(m[2])}`)],
   [/^(\d+) photos$/, (m) => `${m[1]} fotos`],
@@ -165,8 +169,10 @@ const RULES = [
     `No encontré ${noun(m[1])} en la foto ${m[2]} de ${m[3]}. Vuelve a tomar esa con más de ${noun(m[4])} y ${noun(m[5])} ${whole(m[5])} en la foto, y deja la hoja donde está.`],
   [/^I couldn’t measure photo (\d+) of (\d+): (.+?)\. Retake that one, and leave the paper where it is\.$/, (m) =>
     `No pude medir la foto ${m[1]} de ${m[2]}: ${es(m[3])}. Vuelve a tomar esa, y deja la hoja donde está.`],
-  [/^The photos weren’t combined: the floor seen in the photos fills only (\d+)% of a rectangle, so either the room isn’t a rectangle or a photo didn’t line up\. This answer is from photo (\d+) alone\. (.+)$/, (m) =>
-    `No se combinaron las fotos: el piso que se ve en las fotos llena solo el ${m[1]}% de un rectángulo, así que o el cuarto no es rectangular o una foto no cuadró. Esta respuesta es solo de la foto ${m[2]}. ${es(m[3])}`],
+  [/^The photos weren’t combined: the floor seen in the photos fills only (\d+)% of a rectangle, so a photo probably didn’t line up\. This answer is from photo (\d+) alone\. (.+)$/, (m) =>
+    `No se combinaron las fotos: el piso que se ve en las fotos llena solo el ${m[1]}% de un rectángulo, así que probablemente una foto no cuadró. Esta respuesta es solo de la foto ${m[2]}. ${es(m[3])}`],
+  [/^The photos weren’t combined: photos (\d+) and (\d+) share only (\d+)% of the floor around the sheet, so one of them didn’t line up \(or the paper moved\)\. This answer is from photo (\d+) alone\. (.+)$/, (m) =>
+    `No se combinaron las fotos: las fotos ${m[1]} y ${m[2]} comparten solo el ${m[3]}% del piso alrededor de la hoja, así que una de ellas no cuadró (o la hoja se movió). Esta respuesta es solo de la foto ${m[4]}. ${es(m[5])}`],
   [/^(\d+) tiles, (.+?) × (.+?) in \(same lot number on every box\)$/, (m) => `${m[1]} baldosas de ${m[2]} × ${m[3]} pulg. (mismo número de lote en todas las cajas)`],
   [/^Start at the center of the room: (.+) across, (.+) along\.$/, (m) => `Empieza en el centro del cuarto: ${tileAxis(m[1])} a lo ancho, ${tileAxis(m[2])} a lo largo.`],
   [/^(\d+) × (edge pieces along the two side walls|edge pieces along the two end walls|corner pieces): (.+)\.$/, (m) => `${m[1]} × ${{ 'edge pieces along the two side walls': 'piezas de borde junto a las dos paredes laterales', 'edge pieces along the two end walls': 'piezas de borde junto a las dos paredes de los extremos', 'corner pieces': 'piezas de esquina' }[m[2]]}: ${es(m[3])}.`],
