@@ -412,6 +412,19 @@ async function correctOnce({ r, chk, dataUrl, text, focal35, live, pipeline, sam
   const tip = chk2?.tip || `I didn’t measure this one: Muse Spark couldn’t confirm SAM’s second outline in time. Retake it with ${item?.name || 'the object'} whole, in focus and near the middle of the shot.`;
   return { ...refuse(r2, pipeline, tip), corrected: r2.corrected };
 }
+// A pale sheet on a gray floor can come back from SAM with no outline for "sheet of paper"; try two other
+// plain wordings for the same thing (only when the first finds nothing) before giving up on the ruler.
+const PAPER_ALTS = ['white paper', 'rectangular white sheet'];
+export async function segmentWithAlts(live, dataUrl, concept) {
+  let seg = await live.segment(dataUrl, concept);
+  if (concept === 'sheet of paper') {
+    for (const alt of PAPER_ALTS) {
+      if ((seg.objects || []).length) break;
+      try { const s2 = await live.segment(dataUrl, alt); if ((s2.objects || []).length) seg = s2; } catch { /* keep the empty result */ }
+    }
+  }
+  return seg;
+}
 const ROLE_INDEX = { target: 0, ruler: 1, other: 2 };
 const confOf = (seg) => { const cs = (seg.objects || []).map((o) => o.c).filter((c) => c != null); return cs.length ? Math.round(Math.max(...cs) * 100) / 100 : null; };
 
@@ -419,7 +432,7 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline, sam = { cac
   // SAM's outlines for this photo, by concept: a second attempt reuses them, except the one Spark fixed.
   const segsFor = (concepts) => Promise.all(concepts.map((c, i) => {
     if (sam.override && sam.override.idx === i) return sam.override.seg;
-    if (!sam.cache.has(c)) sam.cache.set(c, live.segment(dataUrl, c));
+    if (!sam.cache.has(c)) sam.cache.set(c, segmentWithAlts(live, dataUrl, c));
     return sam.cache.get(c);
   }));
   if (presetRead) return measureFrom({ dataUrl, text, focal35, live, pipeline, read: presetRead, segsFor, sam });
@@ -733,7 +746,7 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
   const t0 = performance.now();
   let segs;
   try {
-    segs = await Promise.all(dataUrls.map((d, i) => Promise.all(concepts.map((c) => live.segment(d, c))).then((sg) => {
+    segs = await Promise.all(dataUrls.map((d, i) => Promise.all(concepts.map((c) => segmentWithAlts(live, d, c))).then((sg) => {
       pipeline.add({ model: 'sam-3.1', step: `${label(i)}: outline ${concepts.join(' and ')}`, ms: Math.round(performance.now() - t0), result: samResult(concepts, sg) });
       return sg;
     })));
