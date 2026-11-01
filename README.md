@@ -202,7 +202,7 @@ Every commit in this repository is from the hackathon window; the first is Oct 2
 | Oct 28 | Tile answer passes our own unit check; every chip's template is tested | `5a171ee` |
 | Oct 28 | Hundredths under an inch; owner gets the job in English for Spanish questions; Spanish outline labels | `0eaf815` |
 | Nov 1 | Whole floor from several photos: 2 to 4 photos of one floor with the same sheet of paper combined on the paper's plane (`src/floor.js`), per-photo steps and checks, retake and different-floor refusals, `dataUrls` on `/api/measure` with per-photo limits, the page's "Add another photo of the same floor", Spanish, tests | `8f438dc`, `9c4d81e`, `b5143b3`, `4b3f65e`, `2c833ab`, `4a3c7cc`, `3d41482` |
-| Nov 1 | Review fixes: the paper's long edge chosen with the camera (focal length), not pixel length; per-photo sanity bounds; rectangle-fill check; refused answers withhold every panel number; page never wipes staged photos, per-thumbnail ×, pins stay inside the photo; JSON 413; sample chips with several photos; README honesty on the rectangle limit and the half-turn claim | `23b9afe`, `a0246ec`, `7486132`, `246408f`, `README commit` |
+| Nov 1 | Review fixes: the paper's long edge chosen with the camera (focal length), not pixel length; per-photo sanity bounds; rectangle-fill check; refused answers withhold every panel number; page never wipes staged photos, per-thumbnail ×, pins stay inside the photo; JSON 413; sample chips with several photos; README honesty on the rectangle limit and the half-turn claim | `23b9afe`, `a0246ec`, `7486132`, `246408f`, `f5570ce`, `9c1fcf9` |
 
 See `git log` for the full history.
 
