@@ -49,7 +49,8 @@ test('three partial photos of a 10 × 12 ft room combine to the whole room (area
   near(sqftOf(r), 120, 0.08, 'area');
   const [w, l] = r.numbers.find((n) => n.label === 'Floor').value.split(' × ').map(feetOf);
   near(w, 10, 0.05, 'width'); near(l, 12, 0.05, 'length');
-  assert.match(r.answer, /^The floor is about 1?\d ft(?: \d+ in)? by 1\d ft(?: \d+ in)? \([\d.]+ sq ft\), combined from 3 photos on the paper’s plane\./);
+  assert.match(r.answer, /^Combined from 3 photos: the floor is about 1?\d ft(?: \d+ in)? by 1\d ft(?: \d+ in)? \([\d.]+ sq ft\)\. In 12 × 12 in tile .* buy \d+ tiles\. Send one more if a corner is still missing, or tap Send to the business\.$/);
+  assert.equal(r.wantMore, true);
   assert.equal(r.numbers.find((n) => n.label === 'Photos').value, '3 photos');
   assert.equal(r.combined.photos, 3);
   assert.equal(r.combined.ok, true);
@@ -82,7 +83,13 @@ test('three partial photos of a 10 × 12 ft room combine to the whole room (area
 // alone picks the wrong side from about 40° on; the camera's focal length tells the two apart. At a steep
 // tilt the far sheet is under 55 px on its short side, where that choice is a coin toss (Review C's sweep),
 // so those photos are asked for again instead of measured.
-const refusedSmallPaper = (r, k) => { assert.equal(r.ok, false); assert.equal(r.photo, k); assert.match(r.ask, new RegExp(`^I couldn’t measure photo ${k} of \\d: the paper is too small or too far away in this photo to trust; get closer to it\\. Retake that one, and leave the paper where it is\\.$`)); };
+// A photo whose sheet is too small to read is dropped and asked for again; the other photos still answer
+// (a partial "so far" when one is left), so the room never comes from a blown-up map.
+const refusedSmallPaper = (r, k) => {
+  assert.ok(r.dropped?.includes(k), `photo ${k} dropped: ${JSON.stringify(r.dropped)} ${r.ask}`);
+  assert.match(r.ask, new RegExp(`Photo ${k}: Get closer to the sheet for that one and send it again\\.`));
+  if (r.ok) { assert.ok(r.partial || r.combined?.ok === false || r.photos === 1, 'no combined room from the remaining photos'); assert.ok(!r.combined || r.combined.ok === false || !r.combined.turned, JSON.stringify(r.combined)); }
+};
 test('the paper turned 90° (long edge along the room, toward the doorways) still gives the room; a steep tilt with a small far sheet is a retake', async () => {
   const paper90 = rectShape(300, -200, 279.4, 215.9, 90);
   const { urls, deps } = scene(POSES, { paper: POSES.map(() => paper90) });
@@ -111,9 +118,9 @@ test('Review A’s scene: an 8 × 14 ft room, paper 300 mm from a wall, two end-
     const poses = [{ tiltDeg: tilt, D: 3800, f: 1300, panDeg: 0, aim: [0, -700] }, { tiltDeg: tilt, D: 3800, f: 1300, panDeg: 180, aim: [0, 700] }];
     const { urls, deps } = scene(poses, { floor: [room, room], paper: [paper, paper] });
     const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
-    refusedSmallPaper(r, tilt === 60 ? r.photo : 2); // never 186 or 189 sq ft for a 112 sq ft room (at 60° both sheets are marginal)
-    assert.ok(!r.pipeline.some((s) => s.model === 'first-answer math' && s.result && !s.result.withheld));
-    assert.ok(r.pipeline.filter((s) => s.model === 'first-answer math').every((s) => stepDetail(s) === 'measured, but not sent: a photo needs a retake'));
+    refusedSmallPaper(r, tilt === 60 ? r.dropped[0] : 2); // never 186 or 189 sq ft for a 112 sq ft room (at 60° both sheets are marginal)
+    if (r.ok) { assert.equal(r.partial, true); assert.ok(parseFloat(r.numbers[0].value) < 112, `so far ${r.numbers[0].value}`); }
+    else assert.ok(r.pipeline.filter((s) => s.model === 'first-answer math').every((s) => stepDetail(s) === 'measured, but not sent: a photo needs a retake'));
   }
   // Closer doorways (the sheet 80 px and up in both): the room, within 5% a side.
   const poses = [{ tiltDeg: 40, D: 2600, f: 1300, panDeg: 0, aim: [-200, -900] }, { tiltDeg: 40, D: 2600, f: 1300, panDeg: 180, aim: [-200, -300] }];
@@ -123,7 +130,7 @@ test('Review A’s scene: an 8 × 14 ft room, paper 300 mm from a wall, two end-
     const [w, l] = r.numbers.find((n) => n.label === 'Floor').value.split(' × ').map(feetOf);
     near(w, 8, 0.05, 'width');
     assert.ok(l <= 14 * 1.05, `length ${l} (the two photos may not reach both end walls)`);
-  } else refusedSmallPaper(r, r.photo);
+  } else refusedSmallPaper(r, r.dropped[0]);
   // The single-photo path gets the right sides too (before: 9.25 × 10.36 ft for a partial 8 × 12 view).
   const cam = camera({ tiltDeg: 50, D: 3000, f: 1300, panDeg: 90, aim: [-400, -1200] });
   const paperX = rectShape(-2438 / 2 + 300 + 140, -4267 / 2 + 600 + 108, 279.4, 215.9, 0);
@@ -140,7 +147,9 @@ test('Review C’s 11 × 9 ft room with the sheet 200 mm from a corner: the trut
   // The reviewer's poses (tilt 30/45/65, pans 0/120/240): the 65° photo's sheet is 37 px tall, a retake.
   const theirs = [{ tiltDeg: 30, D: 3600, f: 1300, panDeg: 0, aim: [-600, -300] }, { tiltDeg: 45, D: 3600, f: 1300, panDeg: 120, aim: [-500, -400] }, { tiltDeg: 65, D: 3600, f: 1300, panDeg: 240, aim: [-700, -500] }];
   const t = scene(theirs, { floor: theirs.map(() => room), paper: theirs.map(() => paper) });
-  refusedSmallPaper(await measureAnything({ dataUrls: t.urls, text: 'tiles', deps: t.deps }), 3);
+  const tr = await measureAnything({ dataUrls: t.urls, text: 'tiles', deps: t.deps });
+  assert.deepEqual(tr.dropped, [3]);
+  assert.match(tr.ask, /^Photo 3: Get closer to the sheet for that one and send it again\./);
   // Three doorway shots that can all read the sheet: the number is within 8% and the range holds the truth.
   for (const [tilt, D] of [[50, 2600], [42, 3000], [42, 3400]]) {
     const poses = [20, 110, 200].map((pan) => ({ tiltDeg: tilt, D, f: 1300, panDeg: pan, aim: [pc[0] + 500, pc[1] + 400] }));
@@ -176,10 +185,12 @@ test('a photo with the paper too small or too far is a retake of that photo, nev
   const poses = [{ tiltDeg: 28, D: 3800, f: 1300, panDeg: 0, aim: [0, -700] }, { tiltDeg: 28, D: 3800, f: 1300, panDeg: 180, aim: [0, 700] }];
   const { urls, deps } = scene(poses, { floor: [room, room], paper: [paper, paper] });
   const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
-  assert.equal(r.ok, false);
-  assert.equal(r.photo, 2);
-  assert.match(r.ask, /^I couldn’t measure photo 2 of 2: the (?:paper is too small or too far away|floor came out impossibly big).*Retake that one, and leave the paper where it is\.$/);
-  assert.ok(!r.pipeline.some((s) => s.model === 'first-answer math' && s.result && !s.result.withheld));
+  // Photo 2 is dropped; photo 1 answers alone, as a partial, and the tip asks for photo 2 again.
+  assert.deepEqual(r.dropped, [2]);
+  assert.equal(r.ok, true, r.ask);
+  assert.equal(r.partial, true);
+  assert.match(r.ask, /^Photo 2: Get closer to the sheet for that one and send it again\./);
+  assert.ok(parseFloat(r.numbers[0].value) < 112);
 });
 
 test('a union that does not fill a rectangle (a cross of misaligned floors, or an L) is not called a room', () => {
@@ -229,21 +240,35 @@ test('in the rendered room the second doorway’s photo really does come out tur
   assert.ok(r.combined.turned.some(Boolean), `turned: ${r.combined.turned}`);
 });
 
-test('no paper in photo 2: it names the photo and asks for that one again', async () => {
+test('no paper in photo 2: that photo is dropped and asked for again; the other photos still answer', async () => {
   const { urls, deps } = scene(POSES, { paper: [PAPER, null, PAPER] });
   const r = await measureAnything({ dataUrls: urls, text: 'tile for this floor', deps });
-  assert.equal(r.ok, false);
-  assert.equal(r.photo, 2);
-  assert.match(r.ask, /^I couldn’t find the sheet of printer paper in photo 2 of 3\. Retake that one with the whole sheet in the shot, and leave the paper where it is\.$/);
-  assert.equal(r.overlays.length, 3); // every photo's outlines, the one after the failing photo too
-  assert.ok(!r.numbers.length && !r.headline);
-  // No number anywhere: our math's steps for the other photos are withheld in the panel.
-  assert.ok(!r.pipeline.some((s) => s.model === 'first-answer math' && s.result && !s.result.withheld), JSON.stringify(r.pipeline.map((s) => [s.step, s.result])));
-  assert.doesNotMatch(r.pipeline.map(stepDetail).join(' '), /\d+ sq ft|floor seen/);
+  assert.equal(r.ok, true, r.ask);
+  assert.deepEqual(r.dropped, [2]);
+  assert.match(r.ask, /^Photo 2: I can’t line that one up without the paper\. Send it again with the whole sheet in the shot \(and leave the sheet where it is\)\. Combined from 2 photos — check one wall/);
+  assert.equal(r.combined.photos, 2);
+  assert.match(r.answer, /^Combined from 2 photos:/);
+  assert.equal(r.overlays.length, 3); // every photo's outlines, the dropped one too
+  // The dropped photo gets no Spark check and no number.
+  assert.ok(!r.pipeline.some((s) => /photo 2 of 3: map/.test(s.step)));
+  // Photo 1 alone with a paperless photo 2: photo 1's partial answer plus the request.
+  const two = scene(POSES.slice(0, 2), { paper: [PAPER, null] });
+  const r2 = await measureAnything({ dataUrls: two.urls, text: 'tile', deps: two.deps });
+  assert.equal(r2.ok, true, r2.ask);
+  assert.equal(r2.partial, true);
+  assert.deepEqual(r2.dropped, [2]);
+  assert.match(r2.ask, /^Photo 2: I can’t line that one up without the paper\./);
   // No floor in photo 3 says so too.
   const r3 = await measureAnything({ dataUrls: urls, text: 'tile', deps: scene(POSES, { floor: [ROOM, ROOM, null] }).deps });
-  assert.equal(r3.ok, false);
-  assert.match(r3.ask, /^I couldn’t find the floor in photo 3 of 3\. Retake that one with more of the floor and the whole sheet in the shot, and leave the paper where it is\.$/);
+  assert.deepEqual(r3.dropped, [3]);
+  assert.match(r3.ask, /^Photo 3: I couldn’t find the floor in that one\. Send it again with more of the floor and the whole sheet in the shot\./);
+  // Nothing usable at all: the request fails and the panel withholds every number.
+  const none = scene(POSES.slice(0, 2), { paper: [null, null] });
+  const r0 = await measureAnything({ dataUrls: none.urls, text: 'tile', deps: none.deps });
+  assert.equal(r0.ok, false);
+  assert.deepEqual(r0.dropped, [1, 2]);
+  assert.match(r0.ask, /^Photo 1: I can’t line that one up without the paper\..* Photo 2: I can’t line that one up/);
+  assert.ok(!r0.pipeline.some((s) => s.model === 'first-answer math' && s.result && !s.result.withheld));
 });
 
 test('a photo of a different floor (or a moved paper) is refused: the best single photo answers, with a note', async () => {
@@ -290,12 +315,13 @@ test('a Spanish question gets the combined card in Spanish', async () => {
   const r = await measureAnything({ dataUrls: urls, text: '¿Cuántas baldosas necesito para este piso? Hay una hoja de papel en el piso.', deps: { ...deps, read: async () => R({ language: 'es' }) } });
   assert.equal(r.ok, true, r.ask);
   assert.equal(r.lang, 'es');
-  assert.match(r.answer, /^El piso mide unos .+ \([\d.]+ pies cuadrados\), combinando 3 fotos sobre el plano de la hoja de papel\./);
+  assert.match(r.answer, /^Combinando 3 fotos: el piso mide unos .+ \([\d.]+ pies cuadrados\)\. Con baldosas .* compra \d+ baldosas\. Manda una más si todavía falta una esquina, o toca Enviar al negocio\.$/);
   assert.equal(r.numbers.find((n) => n.label === 'Fotos').value, '3 fotos');
   assert.match(r.ask, /Combinado de 3 fotos/);
   assert.ok(r.overlays.every((o) => o.outlines.some((x) => x.label === 'hoja de papel')));
   const missing = await measureAnything({ dataUrls: urls, text: 'baldosas', deps: { ...scene(POSES, { paper: [PAPER, null, PAPER] }).deps, read: async () => R({ language: 'es' }) } });
-  assert.match(missing.ask, /^No encontré la hoja de papel en la foto 2 de 3\. Vuelve a tomar esa con la hoja completa en la foto, y deja la hoja donde está\.$/);
+  assert.match(missing.ask, /^Foto 2: No puedo alinear esa sin la hoja\. Mándala otra vez con la hoja completa en la foto \(y deja la hoja donde está\)\. Combinado de 2 fotos: revisa una pared/);
+  assert.equal(missing.lang, 'es');
 });
 
 test('several photos with a task that is not a floor: the first photo is measured and the note says so', async () => {
@@ -339,7 +365,7 @@ test('/api/measure takes two photos and streams one progress line per photo, the
     assert.equal(r.type, 'result');
     assert.equal(r.ok, true, r.ask);
     assert.equal(r.overlays.length, 2);
-    assert.match(r.answer, /combined from 2 photos/);
+    assert.match(r.answer, /^Combined from 2 photos:/);
     assert.ok(r.handoff?.id);
     assert.match(r.business.job, /sq ft \(from 2 photos\)/);
     assert.match(r.business.quote, /sq ft × \$8\.50 per sq ft/);
@@ -351,6 +377,40 @@ test('/api/measure takes two photos and streams one progress line per photo, the
     assert.match(lead.sight.job, /from 2 photos/);
     assert.equal(lead.sight.task, 'floor_tile');
     assert.ok(lead.quote.total >= 600);
+  } finally {
+    srv._testDeps.current = null;
+  }
+});
+
+test('the conversation: photo 1 alone is a partial that asks for more; photos 1+2 combine; a paperless photo 2 keeps photo 1 and asks again', async () => {
+  const { segs } = scene(POSES.slice(0, 2));
+  const noPaper = scene(POSES.slice(0, 2), { paper: [PAPER, null] }).segs;
+  const urls = [`${TINY}1`, `${TINY}2`, `${TINY}3`]; // photo 3 is photo 2 shot without the paper
+  srv._testDeps.current = { read: async () => R({}), segment: async (d, c) => { const i = urls.indexOf(d); return (i === 2 ? noPaper[1] : segs[i])?.[c] || EMPTY; } };
+  const go = async (dataUrls) => (await (await post(dataUrls.length > 1 ? { dataUrls, text: 'tile this floor, paper on it' } : { dataUrl: dataUrls[0], text: 'tile this floor, paper on it' })).text()).trim().split('\n').map((l) => JSON.parse(l)).at(-1);
+  try {
+    // 1. One photo from the doorway: part of the floor, so far, and a request for more. No job yet.
+    const one = await go([urls[0]]);
+    assert.equal(one.ok, true, one.ask);
+    assert.equal(one.partial, true);
+    assert.equal(one.wantMore, true);
+    assert.match(one.answer, /^I can see part of the floor: about \d+ sq ft so far\. Send one or two more photos/);
+    assert.equal(one.handoff, null);
+    assert.equal(one.business, null);
+    // 2. The page sends photo 1 again with photo 2: combined, with a job the board can take.
+    const two = await go([urls[0], urls[1]]);
+    assert.equal(two.ok, true, two.ask);
+    assert.match(two.answer, /^Combined from 2 photos: the floor is about .* Send one more if a corner is still missing, or tap Send to the business\.$/);
+    assert.ok(two.handoff?.id);
+    assert.equal(two.dropped, undefined);
+    near(parseFloat(two.numbers.find((n) => n.label === 'Area').value), 120, 0.08, 'area');
+    // 3. Photo 1 with a photo that has no sheet: photo 1's partial again, the bad one named and dropped.
+    const bad = await go([urls[0], urls[2]]);
+    assert.equal(bad.ok, true, bad.ask);
+    assert.equal(bad.partial, true);
+    assert.deepEqual(bad.dropped, [2]);
+    assert.match(bad.ask, /^Photo 2: I can’t line that one up without the paper\. Send it again with the whole sheet in the shot \(and leave the sheet where it is\)\./);
+    assert.equal(bad.handoff, null);
   } finally {
     srv._testDeps.current = null;
   }

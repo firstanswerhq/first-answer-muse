@@ -80,15 +80,23 @@ test('will a 12 ft shed fit between the fence and the house? (13.5 ft gap)', asy
   assert.match(r.answer, /12 ft wide one fits/);
 });
 
-test('a floor that runs off the photo is flagged, not trusted', async () => {
+test('a floor that runs off the photo is a partial: what was seen so far, and a request for more photos', async () => {
   const cam = camera({ tiltDeg: 35, D: 2500, f: 1100, panDeg: 5 });
   const floor = rectShape(0, 0, 3658, 3048, 0), paper = rectShape(-100, 150, 279.4, 215.9, 15);
   const r = await measureAnything({
     dataUrl: 'x', text: 'tile for this floor',
     deps: deps(R({ task: 'floor_tile', target: 'floor', ruler: 'paper_letter' }), { floor: samSeg(cam, floor.inside, floor.boundary), 'sheet of paper': samSeg(cam, paper.inside, paper.boundary) }),
   });
-  assert.equal(r.confidence, 'low');
-  assert.match(r.ask, /step back/);
+  assert.equal(r.ok, true, r.ask);
+  assert.equal(r.partial, true);
+  assert.equal(r.wantMore, true);
+  assert.match(r.headline, /^About \d+ sq ft so far$/);
+  assert.match(r.answer, /^I can see part of the floor: about \d+ sq ft so far\. Send one or two more photos from another doorway or corner, and leave the sheet of paper where it is, so I can measure the whole room\.$/);
+  assert.equal(r.business, null);
+  assert.deepEqual(r.shopping, []);
+  assert.ok(!r.numbers.some((n) => /tiles|Buy|Floor/.test(n.label)));
+  assert.equal(r.numbers[0].label, 'Seen so far');
+  assert.ok(parseFloat(r.numbers[0].value) < 120);
 });
 
 test('no ruler in the shot: it asks for one, plainly', async () => {

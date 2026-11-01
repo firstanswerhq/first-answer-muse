@@ -47,7 +47,14 @@ const EXACT = {
   Area: 'Área', Range: 'Rango', Size: 'Tamaño', 'Concrete sealer': 'Sellador para concreto', 'Asphalt sealer': 'Sellador para asfalto',
   'Chip size': 'Tamaño del impacto', 'Crack length': 'Largo de la grieta', 'Repair limit': 'Límite para reparar',
   'Foot length': 'Largo del pie', 'US men’s': 'EE. UU. hombre', 'US women’s': 'EE. UU. mujer', EU: 'EU',
-  Narrowest: 'Lo más angosto', Typical: 'Normal', Needs: 'Necesita', Floor: 'Piso', 'Full tiles': 'Baldosas enteras', Buy: 'Comprar', Photos: 'Fotos',
+  Narrowest: 'Lo más angosto', Typical: 'Normal', Needs: 'Necesita', Floor: 'Piso', 'Full tiles': 'Baldosas enteras', Buy: 'Comprar', Photos: 'Fotos', 'Seen so far': 'Visto por ahora',
+  // the conversation around a floor
+  'Send one or two more photos from another doorway or corner, and leave the sheet of paper where it is, so I can measure the whole room.': 'Manda una o dos fotos más desde otra puerta u otra esquina, y deja la hoja de papel donde está, para que pueda medir todo el cuarto.',
+  'Send one more if a corner is still missing, or tap Send to the business.': 'Manda una más si todavía falta una esquina, o toca Enviar al negocio.',
+  'That’s the limit of 4 photos; tap Send to the business.': 'Ese es el límite de 4 fotos; toca Enviar al negocio.',
+  'I can’t line that one up without the paper. Send it again with the whole sheet in the shot (and leave the sheet where it is).': 'No puedo alinear esa sin la hoja. Mándala otra vez con la hoja completa en la foto (y deja la hoja donde está).',
+  'I couldn’t find the floor in that one. Send it again with more of the floor and the whole sheet in the shot.': 'No encontré el piso en esa. Mándala otra vez con más piso y la hoja completa en la foto.',
+  'Get closer to the sheet for that one and send it again.': 'Acércate a la hoja para esa y mándala otra vez.',
   Length: 'Largo', Width: 'Ancho', 'Long side': 'Lado largo', 'Short side': 'Lado corto', Accuracy: 'Precisión', Height: 'Altura', Distance: 'Distancia',
   // values
   '1 in (a quarter)': '1 pulg. (una moneda de un cuarto de dólar)',
@@ -140,8 +147,11 @@ const RULES = [
   [/^The gap is about (.+?), and (.+?) at the narrowest spot\.$/, (m) => `El espacio mide unos ${units(m[1])}, y ${units(m[2])} en la parte más angosta.`],
   [/^(.+) wide unit$/, (m) => `Unidad de ${units(m[1])} de ancho`],
   // tile
-  [/^The floor is about (.+?) by (.+?) \(([\d,.]+) sq ft\)(?:, combined from (\d+) photos on the paper’s plane)?\. In (.+?) × (.+?) in tile that’s (\d+) tiles laid, plus (\d+)% extra for cuts and mistakes: buy (\d+) tiles\.$/, (m) =>
-    `El piso mide unos ${units(m[1])} por ${units(m[2])} (${m[3]} pies cuadrados)${m[4] ? `, combinando ${m[4]} fotos sobre el plano de la hoja de papel` : ''}. Con baldosas de ${m[5]} × ${m[6]} pulg. son ${m[7]} baldosas colocadas, más ${m[8]}% extra para cortes y errores: compra ${m[9]} baldosas.`],
+  [/^(?:Combined from (\d+) photos: the floor|The floor) is about (.+?) by (.+?) \(([\d,.]+) sq ft\)\. In (.+?) × (.+?) in tile that’s (\d+) tiles laid, plus (\d+)% extra for cuts and mistakes: buy (\d+) tiles\.(?: (Send one more if a corner is still missing, or tap Send to the business\.|That’s the limit of 4 photos; tap Send to the business\.))?$/, (m) =>
+    `${m[1] ? `Combinando ${m[1]} fotos: el piso` : 'El piso'} mide unos ${units(m[2])} por ${units(m[3])} (${m[4]} pies cuadrados). Con baldosas de ${m[5]} × ${m[6]} pulg. son ${m[7]} baldosas colocadas, más ${m[8]}% extra para cortes y errores: compra ${m[9]} baldosas.${m[10] ? ` ${es(m[10])}` : ''}`],
+  [/^About (\d+) sq ft so far$/, (m) => `Unos ${m[1]} pies cuadrados por ahora`],
+  [/^I can see part of the floor: about (\d+) sq ft so far\. (.+)$/, (m) => `Veo parte del piso: unos ${m[1]} pies cuadrados por ahora. ${es(m[2])}`],
+  [/^Photo (\d+): (.+)$/, (m) => `Foto ${m[1]}: ${es(m[2])}`],
   [/^(\d+) photos$/, (m) => `${m[1]} fotos`],
   [/^Combined from (\d+) photos — check one wall with a tape before cutting\.$/, (m) => `Combinado de ${m[1]} fotos: revisa una pared con cinta antes de cortar.`],
   [/^The photos weren’t combined: photo (\d+) doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved\. This answer is from photo (\d+) alone\. (.+)$/, (m) =>
@@ -182,6 +192,25 @@ export function es(str) {
   const s = String(str);
   if (EXACT[s]) return EXACT[s];
   for (const [re, fn] of RULES) { const m = s.match(re); if (m) return fn(m); }
+  // A tip made of several strings we know, joined with spaces ("Photo 2: ... Send it again ... Combined
+  // from 2 photos — ..."): the longest run of sentences with a rule, then the next, until all are done.
+  const parts = s.match(/[^.!?]+(?:\.|\)|!|\?)+(?=\s|$)/g);
+  if (parts && parts.length > 1 && parts.join(' ').replace(/\s+/g, ' ') === s.replace(/\s+/g, ' ')) {
+    const out = [];
+    let i = 0;
+    while (i < parts.length) {
+      let j;
+      for (j = parts.length; j > i; j--) {
+        const cand = parts.slice(i, j).map((x) => x.trim()).join(' ');
+        if (j - i === parts.length) continue; // the whole string already had no rule
+        const e = es(cand);
+        if (e !== cand) { out.push(e); break; }
+      }
+      if (j === i) return s;
+      i = j;
+    }
+    return out.join(' ');
+  }
   let out = s, hit = false;
   for (const [en, sp] of PHRASES) if (out.includes(en)) { out = out.split(en).join(sp); hit = true; }
   if (hit) return out;
