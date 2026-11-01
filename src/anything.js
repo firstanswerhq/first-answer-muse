@@ -425,6 +425,17 @@ export async function segmentWithAlts(live, dataUrl, concept) {
   }
   return seg;
 }
+// A sheet of paper meant for a floor lies ON the floor: among SAM's paper outlines, prefer the best one whose
+// centre falls inside the floor's box (a paper towel on the wall does not), else the best one overall.
+export function bestOnFloor(objects, floor) {
+  const objs = objects || [];
+  const b = floor && floor.box;
+  if (b && objs.length > 1) {
+    const on = objs.filter((o) => o.box && (o.box.x1 + o.box.x2) / 2 >= b.x1 && (o.box.x1 + o.box.x2) / 2 <= b.x2 && (o.box.y1 + o.box.y2) / 2 >= b.y1 && (o.box.y1 + o.box.y2) / 2 <= b.y2);
+    if (on.length) return best(on);
+  }
+  return best(objs);
+}
 const ROLE_INDEX = { target: 0, ruler: 1, other: 2 };
 const confOf = (seg) => { const cs = (seg.objects || []).map((o) => o.c).filter((c) => c != null); return cs.length ? Math.round(Math.max(...cs) * 100) / 100 : null; };
 
@@ -495,7 +506,8 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
   }
   const [tSeg, rSeg, bSeg] = segs;
   const frame = tSeg.frame || rSeg.frame || bSeg?.frame;
-  const target = best(tSeg.objects), ruler = best(rSeg.objects), other = bSeg ? best(bSeg.objects) : null;
+  const target = best(tSeg.objects), other = bSeg ? best(bSeg.objects) : null;
+  const ruler = target && concepts[1] === 'sheet of paper' ? bestOnFloor(rSeg.objects, target) : best(rSeg.objects);
   if (!sam.override) pipeline.add({ model: 'sam-3.1', step: `outline: ${concepts.join(', ')}`, result: samResult(concepts, segs) });
 
   const outlines = [outlineOf(target, concepts[0], 'target'), outlineOf(ruler, rulerLabel(read.ruler), 'ruler'), other && outlineOf(other, concepts[2], 'target')].filter(Boolean);
@@ -761,7 +773,7 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
   for (let i = 0; i < n; i++) {
     const [tSeg, rSeg] = segs[i];
     const frame = tSeg.frame || rSeg.frame;
-    const target = best(tSeg.objects), ruler = best(rSeg.objects);
+    const target = best(tSeg.objects), ruler = bestOnFloor(rSeg.objects, target);
     found.push({ target, ruler });
     overlays.push({ frame, outlines: [outlineOf(target, concepts[0], 'target'), outlineOf(ruler, rulerLabel(refKind), 'ruler')].filter(Boolean), lines: [], photo: i + 1 });
     pipeline.checks.push({ dataUrl: dataUrls[i], label: label(i), frame, items: [
