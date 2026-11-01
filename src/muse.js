@@ -79,18 +79,32 @@ export async function sparkReadPhoto({ dataUrl, prompt, schema }) {
 
 // Muse Spark words a short reply from facts we hand it (no photo, no tools). Short timeout, no retries:
 // the caller falls back to its own template if this is slow or fails.
+// The wording call is copy work, so it asks for the least thinking ('minimal'); an endpoint that does
+// not take that value gets 'low' on the retry (remembered for the process).
+let wordingEffort = 'minimal';
 export async function sparkWrite({ system, facts, timeoutMs = 6000 }) {
   spend();
-  const r = await api().chat.completions.create({
+  const call = (effort) => api().chat.completions.create({
     model: SPARK,
-    reasoning_effort: 'low',
-    max_completion_tokens: 600,
+    reasoning_effort: effort,
+    // Spark's reasoning tokens come out of this budget too: the tile task's facts (layout, cut list, five
+    // shopping lines) had it spend the whole 600 on thinking and return no text. 1,500 leaves room.
+    max_completion_tokens: 1500,
     messages: [
       { role: 'developer', content: system },
       { role: 'user', content: typeof facts === 'string' ? facts : JSON.stringify(facts) },
     ],
   }, { timeout: timeoutMs, maxRetries: 0 });
-  return String(r.choices[0].message.content || '').trim();
+  let r;
+  try {
+    r = await call(wordingEffort);
+  } catch (e) {
+    if (wordingEffort === 'minimal' && e?.status === 400) { wordingEffort = 'low'; spend(); r = await call('low'); } else throw e;
+  }
+  const text = String(r.choices?.[0]?.message?.content || '').trim();
+  // No text and the budget ran out: say so (the panel shows it), rather than a silent empty string.
+  if (!text && r.choices?.[0]?.finish_reason === 'length') throw new Error('Spark returned no text: it used its whole token budget thinking');
+  return text;
 }
 
 // Muse Spark looks at several images at once (the photo with SAM's outlines drawn on it, and a close-up
