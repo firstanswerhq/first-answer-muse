@@ -214,7 +214,7 @@ Every commit in this repository is from the hackathon window; the first is Oct 2
 | Nov 1 | Verification fixes: a sheet too small to read is a retake (fit, score margin, 55 px), the fallback photo is the finest map, each photo's range is propagated from its sheet's corners, panel says 'a photo needs a retake'; page grid span, kept-first line, 24 px ×; README accuracy from the wrong-edge sweep, build-table dates | `9ff7ce2`, `d832155`, `0cf00ed` (and one hash-only commit) |
 | Nov 1 | The floor as a conversation: one photo gives "so far" and asks for more, each later photo is combined, bad photos are dropped and asked for again, "Send the next sample photo" and "Start over" on the page | `c73c559`, `c2b7805`, `d2361ff`, `7d386b1` |
 | Nov 1 | Sample photos: the bathroom from its two ends, a windshield chip, a side yard, a driveway (AI-generated demo images) | `9fe3aa2` |
-| Nov 1 | Review D fixes: a camera photo sent with nothing typed joins the floor; the 5th photo is stopped on the page; dropped photos badged and named under the answer; each distinct photo counts once per 10 minutes against the per-IP limit; Playwright page test; README | `749fcfe`, `a019ae2`, `a5bb9a9`, and this README commit |
+| Nov 1 | Review D fixes: a camera photo sent with nothing typed joins the floor; the 5th photo is stopped on the page; dropped photos badged and named under the answer; each distinct photo counts once per 10 minutes against the per-IP limit; Playwright page test; README | `749fcfe`, `a019ae2`, `a5bb9a9`, `37e2bdd` (and one hash-only commit) |
 
 See `git log` for the full history.
 
