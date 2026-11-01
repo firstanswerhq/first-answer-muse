@@ -104,7 +104,8 @@ function renderStaged() {
   const box = $('stagedThumbs');
   box.innerHTML = staged.map((s, i) => `<span class="m-thumb"><img src="${s.preview}" alt="Photo ${i + 1} ready to send">${staged.length > 1 ? `<i>${i + 1}</i><button type="button" data-remove="${i}" aria-label="Remove photo ${i + 1}">&times;</button>` : ''}</span>`).join('');
   const n = staged.length;
-  $('stagedMsg').textContent = n > 1 ? `${n} photos of the floor ready. Add a question and tap Send.` : 'Photo ready. Add a question and tap Send.';
+  $('stagedMsg').textContent = n > 1 ? `${n} photos of the floor ready. Add a question and tap Send.` : keptFirst ? 'Only the first photo is kept: several photos are for a floor. Add a question and tap Send.' : 'Photo ready. Add a question and tap Send.';
+  keptFirst = false;
   const canAdd = n > 0 && n < MAX_PHOTOS && floorMode();
   $('addPhoto').classList.toggle('hidden', !canAdd);
   $('addPhoto').textContent = n > 1 ? `Add another photo of the same floor (${n} of ${MAX_PHOTOS})` : 'Add another photo of the same floor';
@@ -141,8 +142,9 @@ $('stagedThumbs').addEventListener('click', (e) => {
 });
 // Leaving floor mode (the message no longer says floor or tile, or another chip was tapped) keeps only
 // the first photo: everything else is measured from one photo.
+let keptFirst = false; // say so once, on the staged bar
 function keepFirstUnlessFloor() {
-  if (staged.length > 1 && !floorMode()) { for (const s of staged.slice(1)) URL.revokeObjectURL(s.preview); staged.length = 1; }
+  if (staged.length > 1 && !floorMode()) { for (const s of staged.slice(1)) URL.revokeObjectURL(s.preview); staged.length = 1; keptFirst = true; }
 }
 let adding = false;
 $('addPhoto').addEventListener('click', () => { adding = true; $('photoIn').click(); });
