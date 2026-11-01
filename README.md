@@ -51,6 +51,19 @@ photo + "how much sealer for my driveway?"
 
 The page labels this honestly: **"Spark wording · numbers from geometry, checked"** (with **"en español"** only when Spark's text was detected as Spanish) when Spark's text passed the check, **"Numbers from geometry"** when the template was kept. Under the photo, a key lists SAM's masks with their confidence and what Spark said when it checked them. While the models work, the waiting steps follow real progress streamed from the server (one NDJSON line per finished step), and the reply's "How Meta's models measured it" panel shows each step's real output and timing. Failed calls show a short reason ("no reply in 6 s", "Meta's server had a hiccup (500)"), never a raw upstream error. A refused answer shows no number anywhere: not on the card, not on the photo, not in the panel (our math's steps say "measured, but not sent"); progress lines carry no step details.
 
+### Whole floor from several photos
+
+One photo from a doorway sees only part of a floor. So the customer lays **one** sheet of printer paper on the floor, square to a wall, leaves it there, and takes 2 to 4 photos from different doorways or corners, with the paper in every shot (the page says so: "Leave the sheet of paper where it is and shoot the floor from another doorway or corner").
+
+- **Per photo**, the same pipeline as one photo: SAM 3.1 outlines the floor and the paper, and Muse Spark checks both outlines (one check per photo; the panel says "photo 2 of 3: ...").
+- **The paper anchors every photo.** Each photo's paper gives a perspective map from that photo's pixels to millimeters on the paper's plane, with the paper's corner as the origin and its long edge as the x axis (`src/flat.js`, the same map the one-photo case uses). Every photo's floor lands in that one frame, so the floors can be laid over each other without knowing where the phone was.
+- **Combine** (`src/floor.js`): the floors are unioned on a grid of 25 mm cells (each cell center is mapped back into each photo and asked "is this inside SAM's floor mask?"). Because the paper is square to a wall, the frame's axes are the walls: the union's bounding rectangle is the room (width × length), and the tile plan comes from that rectangle as it does for one photo. The panel's combine step shows the floor actually seen in sq ft and how much of it each photo covered.
+- **The 180° question.** The paper's long edge is x in every photo and the map keeps handedness (the phone is above the floor), so the only way two photos' frames can disagree is a half turn about the paper. Both are tried; the one whose floor overlaps the earlier photos more wins.
+- **Range:** the combined range is never tighter than the worst photo's (the far part of each mask is the least precise).
+- **It refuses or asks again when:** the paper (or the floor) is not found in a photo: "I couldn't find the sheet of printer paper in photo 2 of 3 ... Retake that one"; Muse Spark disagrees with SAM in any photo: the tip names the photo (no correction round across photos); a photo's floor is more than about a meter from the floor in the other photos on the paper's plane: these are probably not the same floor, or the paper moved, so the combined number is refused and the best single photo answers, with a note saying why. Several photos with a question that isn't about a floor: the first photo is measured and the note says so.
+
+`/api/measure` takes `dataUrls` (1 to 4; `dataUrl` alone still works). Every photo counts against the per-IP limit and reserves 12 Meta calls against the daily cap.
+
 ### What the business gets
 
 Every answer ends with a block for the business: job size, materials and a quote line, and a **Send this to <business>** button with an optional phone field (US numbers; set once, then locked). Tapping it creates a real lead on that business's owner board (`/owner.html?b=<id>`, channel "sight") and shows the customer a confirmation with a link to the board. The button sends only the answer's server-side id (kept for 2 hours) and the phone number, so what lands on the board is exactly what Sight measured.
@@ -73,7 +86,7 @@ On the owner board each Sight lead shows the measured headline, the job, the quo
 
 | Chip | The customer sends | They get | The business gets (on Send) |
 | --- | --- | --- | --- |
-| **Tile floor** | The floor with a sheet of printer paper on it | Floor size and sq ft, tiles to buy (+ waste), a centered layout and cut list | Sq ft, tile count, installed price |
+| **Tile floor** | The floor with a sheet of printer paper on it; or 2 to 4 photos from different doorways with the same sheet left in place (**Add another photo of the same floor**) | Floor size and sq ft, tiles to buy (+ waste), a centered layout and cut list; from several photos, the whole floor combined on the paper's plane, every photo shown with SAM's masks | Sq ft, tile count, installed price |
 | **Windshield chip** | The chip with a quarter beside it | Repair or replace (under a quarter / a 6 in crack), with the size and range | Repair or replacement price |
 | **Shoe size** | A foot on a sheet of paper | Foot length, US men's / women's and EU size (with a note that some brands, like Nike, run small) | Size and width for a fitting |
 | **Shed fit** | The side yard with a door in the shot | Narrowest and typical gap, fits / tight / won't fit for the shed width they typed | Gap, unit width, install price |
@@ -91,6 +104,7 @@ Every answer says what it was measured against, for example **Measured against: 
 | Close-up with a coin | ±4%, ±6% when the coin is seen at more than 30° | Same |
 | Any close-up marked "Rough" | +8% on top of the above | Same |
 | Tile floor area | twice the length range (area) | Rendered 12 × 10 ft floor, within 7% |
+| Whole floor from several photos | twice the worst photo's length range | Rendered 10 × 12 ft room from three partial photos (two doorways and a corner, each seeing 86–90% of the floor): area within 8%, each side within 5% (`test/floor.test.js`; the run lands at 121 sq ft seen, 10 ft 3 in × 12 ft 2 in) |
 | Driveway / patio | ±12% when the geometry checks out, ±30% when it doesn't | Rendered driveways 432 and 1,500 sq ft, within 12–15%; steep side angles are never marked good (`test/measure.test.js`, `test/surface.test.js`) |
 | Ground gap, height, distance | low–high range from the camera pose spread | Rendered 3D yards (`test/distance.test.js`) |
 
@@ -98,7 +112,7 @@ The numbers above come from synthetic scenes with known answers. Real-photo accu
 
 **It refuses or asks again instead of guessing when:** Muse Spark looks at SAM's outlines and disagrees even after one correction round (or the coin is a different coin), there is no ruler in the shot, the ruler is partly hidden or bent, the thing runs off the edge of the photo, a coin is used for something much bigger than itself at an angle, a driveway photo has no garage or front door, the angle is too steep to find the horizon, or SAM can't find the target. Ruler-limit cases (a chip within measuring error of the repair limit) say so.
 
-**Rate and access limits:** `/api/measure` and `/api/photo` allow 20 photos per 10 minutes per IP. The IP is the rightmost `X-Forwarded-For` entry, which Render's proxy appends (anything to its left was written by the caller), then the socket address. `cf-connecting-ip` / `true-client-ip` are ignored unless `TRUST_CLOUDFLARE=1` says the app really sits behind Cloudflare (otherwise anyone could rotate them to dodge the limit). A global cap on Meta calls per day (`META_DAILY_CAP`, default 1,500, reset at midnight UTC) counts every HTTP attempt to Meta, retries included (the SDK's own retries are off; ours are counted), so rotating IP addresses can't drain the credits; endpoints refuse up front when a request can't fit (a Sight photo reserves 12 calls: read, outlines, check, wording and one correction round). `/api/diag` model probes need `DIAG_TOKEN`. The public owner board is an allowlist: no phone numbers, addresses, names, message summaries, voicemail text, crew notes or photos (a text or voicemail lead shows only a label like "Voicemail lead · 0:42"); the full board needs `OWNER_TOKEN`, and a wrong key gets a notice instead of a silent public view.
+**Rate and access limits:** `/api/measure` and `/api/photo` allow 20 photos per 10 minutes per IP. The IP is the rightmost `X-Forwarded-For` entry, which Render's proxy appends (anything to its left was written by the caller), then the socket address. `cf-connecting-ip` / `true-client-ip` are ignored unless `TRUST_CLOUDFLARE=1` says the app really sits behind Cloudflare (otherwise anyone could rotate them to dodge the limit). A global cap on Meta calls per day (`META_DAILY_CAP`, default 1,500, reset at midnight UTC) counts every HTTP attempt to Meta, retries included (the SDK's own retries are off; ours are counted), so rotating IP addresses can't drain the credits; endpoints refuse up front when a request can't fit (a Sight photo reserves 12 calls: read, outlines, check, wording and one correction round; a floor sent as several photos reserves 12 per photo, and each photo counts against the per-IP limit). `/api/diag` model probes need `DIAG_TOKEN`. The public owner board is an allowlist: no phone numbers, addresses, names, message summaries, voicemail text, crew notes or photos (a text or voicemail lead shows only a label like "Voicemail lead · 0:42"); the full board needs `OWNER_TOKEN`, and a wrong key gets a notice instead of a silent public view.
 
 ## Privacy
 
@@ -109,7 +123,7 @@ The numbers above come from synthetic scenes with known answers. Real-photo accu
 
 ```bash
 npm install
-npm test                         # 169 tests, no key needed, no Meta credits spent (fixtures and stand-ins)
+npm test                         # 180 tests, no key needed, no Meta credits spent (fixtures and stand-ins)
 npm start                        # http://localhost:3000/measure.html
 MODEL_API_KEY=... npm start      # live on the Meta Model API
 ```
@@ -136,6 +150,7 @@ Node 22, Express, the OpenAI SDK pointed at the Meta Model API, `@meta-sam/parse
 - `src/overlay.js`, `src/overlay-worker.js`: draws SAM's masks onto the photo and crops close-ups for Spark's check (pure JS, in a worker thread), plus the owner board's small copy.
 - `src/es.js`: Spanish for our template strings, and the language check on Spark's text.
 - `src/flat.js`: close-up measuring next to an everyday ruler (homography, tilted coin), with ± ranges.
+- `src/floor.js`: whole floor from several photos: each photo's floor mapped onto the paper's plane, the 180° rule, the 25 mm grid union and the refusal rules.
 - `src/measure.js`: driveways and patios in square feet from a door's height and the ground's horizon.
 - `src/distance.js`: camera pose from one photo; ground gaps, heights, distances with ranges.
 - `src/face.js`: card-on-forehead face measurements (off unless `SIGHT_FACE=1`).
@@ -176,6 +191,7 @@ Every commit in this repository is from the hackathon window; the first is Oct 2
 | Oct 28 | Privacy: README and page name the Supabase relay route and what is kept in memory | `44b43c8` |
 | Oct 28 | Tile answer passes our own unit check; every chip's template is tested | `5a171ee` |
 | Oct 28 | Hundredths under an inch; owner gets the job in English for Spanish questions; Spanish outline labels | `0eaf815` |
+| Nov 1 | Whole floor from several photos: 2 to 4 photos of one floor with the same sheet of paper combined on the paper's plane (`src/floor.js`), per-photo steps and checks, retake and different-floor refusals, `dataUrls` on `/api/measure` with per-photo limits, the page's "Add another photo of the same floor", Spanish, tests | `8f438dc`, `9c4d81e`, `b5143b3`, `4b3f65e`, `2c833ab`, README commit below |
 
 See `git log` for the full history.
 
