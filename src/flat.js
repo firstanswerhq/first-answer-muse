@@ -268,7 +268,9 @@ function rectMap(refPts, R, boundary = []) {
   const H = homography(c, dst);
   if (!H) return null;
   const ratio = Math.max(side(0) + side(2), side(1) + side(3)) / Math.min(side(0) + side(2), side(1) + side(3));
-  return { toMm: (p) => applyH(H, p), areaScale: (p) => jacobianDet(H, p[0], p[1]), corners: c, shapeCheck: ratio };
+  // H and the ruler's extent (W × Hh mm, from the corner at the origin) are kept so floor.js can map
+  // several photos onto one paper's plane.
+  return { toMm: (p) => applyH(H, p), areaScale: (p) => jacobianDet(H, p[0], p[1]), corners: c, shapeCheck: ratio, H, extentMm: [W, Hh] };
 }
 
 // Focal length in pixels: from the photo's 35 mm-equivalent focal length when known, else a typical
