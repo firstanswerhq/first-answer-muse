@@ -102,7 +102,7 @@ const FLOOR_WORDS = /\b(?:tiles?|tiling|floor|flooring|piso|baldosas?|azulejos?|
 const floorMode = () => floorChip || FLOOR_WORDS.test(textIn.value);
 function renderStaged() {
   const box = $('stagedThumbs');
-  box.innerHTML = staged.map((s, i) => `<span class="m-thumb"><img src="${s.preview}" alt="Photo ${i + 1} ready to send">${staged.length > 1 ? `<i>${i + 1}</i>` : ''}</span>`).join('');
+  box.innerHTML = staged.map((s, i) => `<span class="m-thumb"><img src="${s.preview}" alt="Photo ${i + 1} ready to send">${staged.length > 1 ? `<i>${i + 1}</i><button type="button" data-remove="${i}" aria-label="Remove photo ${i + 1}">&times;</button>` : ''}</span>`).join('');
   const n = staged.length;
   $('stagedMsg').textContent = n > 1 ? `${n} photos of the floor ready. Add a question and tap Send.` : 'Photo ready. Add a question and tap Send.';
   const canAdd = n > 0 && n < MAX_PHOTOS && floorMode();
@@ -113,8 +113,10 @@ function renderStaged() {
   document.querySelector('.m-cam').classList.toggle('armed', n > 0);
 }
 function stage(blob, { add = false } = {}) {
-  // In floor mode a new photo joins the others (up to 4); otherwise it replaces the staged one.
-  if (!add || !floorMode() || staged.length >= MAX_PHOTOS) { for (const s of staged) URL.revokeObjectURL(s.preview); staged = []; }
+  // In floor mode a new photo joins the others; at 4 it replaces the last one (never wipes the set).
+  // Outside floor mode it replaces the staged photo.
+  if (!add || !floorMode()) { for (const s of staged) URL.revokeObjectURL(s.preview); staged = []; }
+  else if (staged.length >= MAX_PHOTOS) { URL.revokeObjectURL(staged[MAX_PHOTOS - 1].preview); staged.length = MAX_PHOTOS - 1; }
   staged.push({ blob, preview: URL.createObjectURL(blob) });
   renderStaged();
   textIn.focus();
@@ -125,7 +127,23 @@ function unstage() {
   floorChip = false;
   renderStaged();
 }
+function removeStaged(i) {
+  if (!staged[i]) return;
+  URL.revokeObjectURL(staged[i].preview);
+  staged.splice(i, 1);
+  if (!staged.length) floorChip = false;
+  renderStaged();
+}
 $('unstage').addEventListener('click', unstage);
+$('stagedThumbs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-remove]');
+  if (b) removeStaged(Number(b.dataset.remove));
+});
+// Leaving floor mode (the message no longer says floor or tile, or another chip was tapped) keeps only
+// the first photo: everything else is measured from one photo.
+function keepFirstUnlessFloor() {
+  if (staged.length > 1 && !floorMode()) { for (const s of staged.slice(1)) URL.revokeObjectURL(s.preview); staged.length = 1; }
+}
 let adding = false;
 $('addPhoto').addEventListener('click', () => { adding = true; $('photoIn').click(); });
 $('photoIn').addEventListener('change', (e) => {
@@ -135,8 +153,9 @@ $('photoIn').addEventListener('change', (e) => {
   adding = false;
   if (f) stage(f, { add });
 });
-// Typing "floor" or "tile" turns on the add-another-photo control for the staged photo.
-textIn.addEventListener('input', () => { if (staged.length) renderStaged(); });
+// Typing "floor" or "tile" turns on the add-another-photo control for the staged photo; dropping those
+// words keeps only the first photo.
+textIn.addEventListener('input', () => { if (staged.length) { keepFirstUnlessFloor(); renderStaged(); } });
 
 // ---------- waiting chips ----------
 function working(dataUrl, n = 1) {
@@ -153,7 +172,16 @@ function working(dataUrl, n = 1) {
     });
     at = n + 1;
   };
-  return { step: (s) => reached(stageOf(s, n)), done: () => el.remove() };
+  // With several photos the SAM line counts them off as each photo's outlines come back.
+  let outlined = 0;
+  const count = (s) => {
+    if (n > 1 && modelInfo(s.model)[0] === 'sam' && /^photo \d+ of \d+: outline/.test(s.step || '')) {
+      outlined++;
+      const li = items[1];
+      li.lastChild.textContent = `outlining the floor and the paper in ${n} photos (${outlined} of ${n} done)`;
+    }
+  };
+  return { step: (s) => { count(s); reached(stageOf(s, n)); }, done: () => el.remove() };
 }
 
 // ---------- annotated photo ----------
@@ -171,11 +199,13 @@ function annotatedShot(dataUrl, overlay, T = UI.en) {
   svg.setAttribute('viewBox', `0 0 ${frame.w} ${frame.h}`);
   svg.setAttribute('preserveAspectRatio', 'none');
   const pct = (x, y) => ({ left: `${(x / frame.w) * 100}%`, top: `${(y / frame.h) * 100}%` });
-  const pin = (cls, text, x, y) => {
+  const pin = (cls, text, x, y, x2 = x) => {
     const p = document.createElement('span');
     p.className = `pin ${cls}`;
     p.textContent = text;
     Object.assign(p.style, pct(x, y));
+    // A box right of center hangs its pin from its right edge, so the text never runs past the photo.
+    if (x / frame.w > 0.4) { p.style.left = 'auto'; p.style.right = `${100 - (Math.min(x2, frame.w) / frame.w) * 100}%`; }
     if (y / frame.h < 0.07) p.classList.add('below');
     wrap.appendChild(p);
   };
@@ -209,8 +239,8 @@ function annotatedShot(dataUrl, overlay, T = UI.en) {
     const label = o.label || (isRuler ? 'reference' : 'target');
     const conf = o.conf != null ? ` · ${Number(o.conf).toFixed(2)}` : '';
     // Rulers are small and often sit inside a target: tag them under the box.
-    if (isRuler) pin('ruler below', `${T.ruler}: ${label}${conf}`, b.x1, Math.min(b.y2, frame.h * 0.92));
-    else pin('target', `${label}${conf}`, b.x1, b.y1);
+    if (isRuler) pin('ruler below', `${T.ruler}: ${label}${conf}`, b.x1, Math.min(b.y2, frame.h * 0.92), b.x2);
+    else pin('target', `${label}${conf}`, b.x1, b.y1, b.x2);
   });
 
   // Measurement lines with end ticks and a label pill in the middle.
@@ -570,7 +600,7 @@ function renderChips() {
       } else {
         floorChip = s.id === 'tile';
         textIn.value = text;
-        if (staged.length) renderStaged();
+        if (staged.length) { keepFirstUnlessFloor(); renderStaged(); }
         textIn.focus();
       }
     });
@@ -588,7 +618,7 @@ fetch('/api/measure/samples')
 
 // The privacy line names the route photos really take (direct to Meta, or through the relay).
 fetch('/api/health').then((r) => r.json()).then((h) => {
-  if (h.relay === 'direct') $('privacyRoute').textContent = 'Your photo and message go from our server straight to Meta’s Muse Spark and SAM 3.1';
+  if (h.relay === 'direct') $('privacyRoute').textContent = 'Your photo(s) and message go from our server straight to Meta’s Muse Spark and SAM 3.1';
 }).catch(() => {});
 
 bubble('note', 'Text one photo and a question. Put a gift card, quarter, sheet of paper, soda can, or a door in the shot and it becomes the ruler. For a whole floor, leave one sheet of paper on it and send up to 4 photos from different doorways.');

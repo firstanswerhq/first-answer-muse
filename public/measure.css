@@ -157,7 +157,7 @@ body {
 
 /* the key under the photo: SAM's masks and Spark's check */
 /* A floor from several photos: the first photo full size, the others small with their own SAM masks. */
-.shots-more { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: #000; }
+.shots-more { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 4px; padding: 4px; background: #000; }
 .shots-more .shot { border-radius: 8px; }
 .shots-more .shot .pin, .shots-more .shot .len { font-size: 9.5px; padding: 3px 5px; }
 .shots-more .shot .o-target, .shots-more .shot .o-ruler { stroke-width: 2; }
@@ -247,6 +247,7 @@ body {
 .m-thumbs { display: flex; flex-wrap: wrap; gap: 6px; flex: none; max-width: 98px; } /* 3 or 4 photos wrap into two rows on a phone */
 .m-thumbs .m-thumb { position: relative; line-height: 0; }
 .m-staged img { width: 46px; height: 46px; object-fit: cover; border-radius: 10px; flex: none; border: 1px solid var(--edge-hi); box-shadow: 0 0 14px rgba(79, 240, 255, .25); }
+.m-thumbs .m-thumb button { position: absolute; right: -5px; top: -5px; width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--edge); background: #0b1628; color: var(--ink); font-size: 12px; line-height: 1; padding: 0; cursor: pointer; }
 .m-thumbs .m-thumb i { position: absolute; left: 4px; bottom: 4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: rgba(0, 0, 0, .7); color: #fff; font: 700 10px/16px var(--body); text-align: center; font-style: normal; }
 .m-staged-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .m-staged-text span { display: block; }

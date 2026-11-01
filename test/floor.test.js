@@ -245,7 +245,7 @@ test('Spark disagrees with SAM in one photo: refused, the tip names that photo, 
   const ok = await measureAnything({ dataUrls: urls, text: 'tile', deps: { ...deps, check: async () => ({ outlines: [{ color: 'MAGENTA', ok: true, seen: 'floor' }, { color: 'ORANGE', ok: true, seen: 'paper' }], problem: '', retake_tip: '' }) } });
   assert.equal(ok.ok, true);
   assert.equal(ok.checked, 'agreed');
-  assert.deepEqual(ok.pipeline.filter((s) => /check SAM/.test(s.step)).map((s) => s.step).sort(), [1, 2, 3].map((i) => `photo ${i} of 3: check SAM’s outlines on the photo`)); // the checks run in parallel
+  assert.deepEqual(ok.pipeline.filter((s) => /check SAM/.test(s.step)).map((s) => s.step), [1, 2, 3].map((i) => `photo ${i} of 3: check SAM’s outlines on the photo`)); // the checks run in parallel; the panel lists them by photo
 });
 
 test('a Spanish question gets the combined card in Spanish', async () => {

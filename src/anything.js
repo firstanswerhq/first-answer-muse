@@ -327,6 +327,12 @@ async function checkAndWord({ r, dataUrl, text, focal35, live, pipeline, sam, wo
     live?.check && checks.length ? Promise.all(checks.map((c) => checkOutlines({ dataUrl: c.dataUrl || dataUrl, live, check: c, pipeline, timeoutMs: checkTimeoutMs, label: c.label }))) : [],
     live?.word ? wordAnswer(r, live, pipeline, wordTimeoutMs) : null,
   ]);
+  // The per-photo checks finish in any order; the panel lists them by photo.
+  if (pipeline.checks) {
+    const idx = pipeline.map((p, i) => (/check SAM’s outlines/.test(p.step) ? i : -1)).filter((i) => i >= 0);
+    const sorted = idx.map((i) => pipeline[i]).sort((a, b) => a.step.localeCompare(b.step, 'en', { numeric: true }));
+    idx.forEach((i, k) => { pipeline[i] = sorted[k]; });
+  }
   const got = chks.filter(Boolean);
   const chk = got.find((c) => c.agreed === false) || (got.some((c) => c.skipped) ? { skipped: true } : got.length ? { agreed: true } : null);
   if (chk) r.checked = chk.agreed ? 'agreed' : chk.skipped ? 'skipped' : 'disagreed';
