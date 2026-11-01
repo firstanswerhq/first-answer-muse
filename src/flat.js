@@ -39,6 +39,10 @@ export const FLAT_REFERENCES = {
 };
 
 const MM_PER_IN = 25.4;
+// A rectangle ruler's fit score (longSideFirst) above this means the outline is not that rectangle (hidden,
+// bent, or the wrong thing): the true one scores about 0.05 to 0.3 for a small far sheet, the wrong
+// side assignment about 0.7.
+export const RECT_FIT_LIMIT = 0.5;
 const frameOf = (o) => o?.frame || null;
 
 // Pixel centers of a SAM object's mask, in photo pixels. Thinned to at most ~maxPts points
@@ -255,14 +259,44 @@ export function minRect(points) {
 
 // ---------- the two rulers ----------
 
+// Which pair of the ruler's sides is the long one. Pixel length alone is wrong under perspective: the
+// edge pointing away from the camera is foreshortened by about cos(tilt), so from about 40° a sheet of
+// paper with its long edge toward the camera reads shorter than its short edge. The four corners alone
+// cannot tell the two rectangles apart (either one gives a perfect homography), but the camera can: for
+// the true rectangle, M = K⁻¹ · H(mm → px) has its first two columns orthogonal and of equal length
+// (they are the plane's axes as the camera sees them); the wrong assignment stretches one column by the
+// ruler's aspect ratio (1.29 for paper). We build both and keep the one closer to orthonormal. Without a
+// frame size (tests that pass bare objects) the pixel lengths decide.
+export function longSideFirst(c, R, frame = null, focal35 = null) {
+  const side = (i) => Math.hypot(c[(i + 1) % 4][0] - c[i][0], c[(i + 1) % 4][1] - c[i][1]);
+  const byPixels = side(0) + side(2) >= side(1) + side(3);
+  const f = focalPxFor(frame, focal35);
+  if (!f) return { longFirst: byPixels, how: 'pixel length' };
+  const cx = frame.w / 2, cy = frame.h / 2;
+  const score = (longFirst) => {
+    const [W, Hh] = longFirst ? [R.long, R.short] : [R.short, R.long];
+    const Hp = homography([[0, 0], [W, 0], [W, Hh], [0, Hh]], c); // mm -> px
+    if (!Hp) return Infinity;
+    // M = K⁻¹ · Hp, columns m1 (x axis) and m2 (y axis).
+    const m1 = [(Hp[0] - cx * Hp[6]) / f, (Hp[3] - cy * Hp[6]) / f, Hp[6]];
+    const m2 = [(Hp[1] - cx * Hp[7]) / f, (Hp[4] - cy * Hp[7]) / f, Hp[7]];
+    const n1 = Math.hypot(...m1), n2 = Math.hypot(...m2);
+    if (!(n1 > 0 && n2 > 0)) return Infinity;
+    const dot = Math.abs(m1[0] * m2[0] + m1[1] * m2[1] + m1[2] * m2[2]) / (n1 * n2);
+    return dot + Math.abs(n1 - n2) / ((n1 + n2) / 2);
+  };
+  const a = score(true), b = score(false);
+  if (!Number.isFinite(a) && !Number.isFinite(b)) return { longFirst: byPixels, how: 'pixel length' };
+  return { longFirst: a <= b, how: 'camera', scores: [a, b] };
+}
+
 // From a rectangle ruler: map from photo pixels to millimeters on the ruler's plane.
-function rectMap(refPts, R, boundary = []) {
+function rectMap(refPts, R, boundary = [], frame = null, focal35 = null) {
   const rough = rectCorners(refPts);
   if (!rough) return null;
   const c = refineCorners(rough, boundary);
   const side = (i) => Math.hypot(c[(i + 1) % 4][0] - c[i][0], c[(i + 1) % 4][1] - c[i][1]);
-  // The longer pair of opposite sides is the ruler's long side.
-  const longFirst = side(0) + side(2) >= side(1) + side(3);
+  const { longFirst, how, scores } = longSideFirst(c, R, frame, focal35);
   const [W, Hh] = longFirst ? [R.long, R.short] : [R.short, R.long];
   const dst = [[0, 0], [W, 0], [W, Hh], [0, Hh]];
   const H = homography(c, dst);
@@ -270,7 +304,7 @@ function rectMap(refPts, R, boundary = []) {
   const ratio = Math.max(side(0) + side(2), side(1) + side(3)) / Math.min(side(0) + side(2), side(1) + side(3));
   // H and the ruler's extent (W × Hh mm, from the corner at the origin) are kept so floor.js can map
   // several photos onto one paper's plane.
-  return { toMm: (p) => applyH(H, p), areaScale: (p) => jacobianDet(H, p[0], p[1]), corners: c, shapeCheck: ratio, H, extentMm: [W, Hh] };
+  return { toMm: (p) => applyH(H, p), areaScale: (p) => jacobianDet(H, p[0], p[1]), corners: c, shapeCheck: ratio, fit: scores ? Math.min(...scores) : null, H, extentMm: [W, Hh], longSideBy: how };
 }
 
 // Focal length in pixels: from the photo's 35 mm-equivalent focal length when known, else a typical
@@ -282,12 +316,12 @@ export function focalPxFor(frame, focal35 = null) {
 }
 
 // A ready-made photo-to-millimeters map from any everyday ruler (used by face.js and others).
-export function rulerMap(ref, refKind) {
+export function rulerMap(ref, refKind, { focal35 = null } = {}) {
   const R = FLAT_REFERENCES[refKind];
   if (!R || !ref) return null;
   const pts = maskPoints(ref, 20000).pts;
   if (pts.length < 30) return null;
-  const map = R.shape === 'circle' ? circleMap(pts, R) : rectMap(pts, R, maskBoundary(ref));
+  const map = R.shape === 'circle' ? circleMap(pts, R) : rectMap(pts, R, maskBoundary(ref), frameOf(ref), focal35);
   return map ? { ...map, R } : null;
 }
 
@@ -322,14 +356,16 @@ function circleMap(refPts, R) {
 /**
  * Measure a flat thing next to an everyday ruler.
  * target: SAM object (crack, stain, mole, wound...). ref: SAM object for the ruler. refKind: key of FLAT_REFERENCES.
+ * focal35: the photo's 35 mm-equivalent focal length when known (else a typical phone), used to tell a
+ * rectangle ruler's long side from its short one under perspective.
  * Returns { ok, areaMm2, areaIn2, lengthMm, widthMm, lengthIn, widthIn, method, confidence, notes }.
  */
-export function measureFlat({ target, ref, refKind }) {
+export function measureFlat({ target, ref, refKind, focal35 = null }) {
   const R = FLAT_REFERENCES[refKind];
   if (!R || !target || !ref) return { ok: false, reason: 'need the thing, a ruler and its kind' };
   const refM = maskPoints(ref, 20000);
   if (refM.pts.length < 30) return { ok: false, reason: 'ruler too small in the photo; move closer' };
-  const map = R.shape === 'circle' ? circleMap(refM.pts, R) : rectMap(refM.pts, R, maskBoundary(ref));
+  const map = R.shape === 'circle' ? circleMap(refM.pts, R) : rectMap(refM.pts, R, maskBoundary(ref), frameOf(ref) || frameOf(target), focal35);
   if (!map) return { ok: false, reason: 'could not read the ruler outline' };
 
   const tm = maskPoints(target);
@@ -346,8 +382,12 @@ export function measureFlat({ target, ref, refKind }) {
   const notes = [];
   let confidence = 'good';
   if (R.shape === 'rect') {
+    // Does the outline look like this rectangle? With the camera known, the fit score (0 = the corners
+    // sit exactly where a rectangle of this size would under this camera) is the test; it is not fooled
+    // by perspective the way the pixel side ratio is. Without a frame, the pixel ratio.
     const expected = R.long / R.short;
-    if (Math.abs(map.shapeCheck - expected) / expected > 0.45) { confidence = 'low'; notes.push('ruler shape looks off; is it partly hidden or bent?'); }
+    const off = map.fit != null ? map.fit > RECT_FIT_LIMIT : Math.abs(map.shapeCheck - expected) / expected > 0.45;
+    if (off) { confidence = 'low'; notes.push('ruler shape looks off; is it partly hidden or bent?'); }
   } else {
     if (map.radiusPx < 15) { confidence = 'low'; notes.push('coin is small in the photo; move closer'); }
     if (map.tiltDeg > 55) { confidence = 'low'; notes.push('photo taken at a steep angle; shoot from straight above'); }

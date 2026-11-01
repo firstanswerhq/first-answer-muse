@@ -68,12 +68,94 @@ test('three partial photos of a 10 × 12 ft room combine to the whole room (area
   }
   const combine = r.pipeline.find((s) => /^combine 3 photos/.test(s.step));
   assert.ok(combine, steps.join(' | '));
-  assert.match(stepDetail(combine), /floor seen \(sq ft\): \d+ · width ft: [\d.]+ · length ft: [\d.]+ · coverage: photo 1 \d+%, photo 2 \d+%, photo 3 \d+%/);
+  assert.match(stepDetail(combine), /floor seen \(sq ft\): \d+ · width ft: [\d.]+ · length ft: [\d.]+ · fills a rectangle: \d+% · coverage: photo 1 \d+%, photo 2 \d+%, photo 3 \d+%/);
   // Our own template passes the wording check (so faithful Spark wording would be used), "3 photos" included.
   const facts = wordingFacts(r);
   assert.deepEqual(checkWording(r.answer, facts, r.headline, { task: r.task }), { ok: true });
   assert.match(checkWording(r.answer.replace('3 photos', '2 photos'), facts, r.headline, { task: r.task }).reason, /2/);
   assert.equal(r.lang, 'en');
+});
+
+// Review A's regression: the paper's long edge pointing at the camera is foreshortened, so pixel length
+// alone picks the wrong side from about 40° on; the camera's focal length tells the two apart.
+test('the paper turned 90° (long edge along the room, toward the doorways) still gives the room, at a moderate and a steep tilt', async () => {
+  const paper90 = rectShape(300, -200, 279.4, 215.9, 90);
+  const steep = [
+    { tiltDeg: 58, D: 3000, f: 1300, panDeg: 0, aim: [0, -500] },
+    { tiltDeg: 58, D: 3000, f: 1300, panDeg: 180, aim: [0, 500] },
+    { tiltDeg: 55, D: 3000, f: 1300, panDeg: 250, aim: [500, 300] },
+  ];
+  for (const [name, poses, paper] of [['rot 90, tilt 35', POSES, paper90], ['rot 90, tilt 55–58', steep, paper90], ['rot 0, tilt 55–58', steep, PAPER]]) {
+    const { urls, deps } = scene(poses, { paper: poses.map(() => paper) });
+    const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
+    assert.equal(r.ok, true, `${name}: ${r.ask}`);
+    assert.equal(r.combined.ok, true, `${name}: ${r.note}`);
+    near(sqftOf(r), 120, 0.08, `${name} area`);
+    const [w, l] = r.numbers.find((n) => n.label === 'Floor').value.split(' × ').map(feetOf);
+    near(w, 10, 0.05, `${name} width`); near(l, 12, 0.05, `${name} length`);
+    assert.doesNotMatch(r.ask, /ruler shape/, name);
+  }
+});
+
+test('Review A’s scene: an 8 × 14 ft room, paper 300 mm from a wall with its long edge along the room, two end-wall doorways, tilt 35 and tilt 60', async () => {
+  const room = rectShape(0, 0, 2438, 4267, 0);
+  const paper = rectShape(-2438 / 2 + 300 + 108, -4267 / 2 + 600 + 140, 279.4, 215.9, 90);
+  for (const tilt of [35, 60]) {
+    const poses = [{ tiltDeg: tilt, D: 3800, f: 1300, panDeg: 0, aim: [0, -700] }, { tiltDeg: tilt, D: 3800, f: 1300, panDeg: 180, aim: [0, 700] }];
+    const { urls, deps } = scene(poses, { floor: [room, room], paper: [paper, paper] });
+    const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
+    assert.equal(r.ok, true, `tilt ${tilt}: ${r.ask}`);
+    assert.equal(r.combined.ok, true, `tilt ${tilt}: ${r.note}`);
+    const [w, l] = r.numbers.find((n) => n.label === 'Floor').value.split(' × ').map(feetOf);
+    near(w, 8, 0.05, `tilt ${tilt} width`); near(l, 14, 0.05, `tilt ${tilt} length`);
+    near(sqftOf(r), 112, 0.08, `tilt ${tilt} area`);
+    assert.doesNotMatch(r.ask, /ruler shape/, `tilt ${tilt}`);
+  }
+  // The single-photo path gets the right sides too (before: 9.25 × 10.36 ft for a partial 8 × 12 view).
+  const cam = camera({ tiltDeg: 50, D: 3000, f: 1300, panDeg: 90, aim: [-400, -1200] });
+  const paperX = rectShape(-2438 / 2 + 300 + 140, -4267 / 2 + 600 + 108, 279.4, 215.9, 0);
+  const m = measureFlat({ target: samSeg(cam, room.inside, room.boundary).objects[0], ref: samSeg(cam, paperX.inside, paperX.boundary).objects[0], refKind: 'paper_letter' });
+  assert.ok(m.ok);
+  near(m.rectWidthMm, 2438, 0.05, 'single-photo width');
+  assert.ok(m.rectLengthMm < 4267 * 1.05, `single-photo length ${m.rectLengthMm} (sees part of the room)`);
+});
+
+test('Review B’s fourth pose (pan 70, sees the paper’s long edge foreshortened) joins the three and the room stays 10 × 12', async () => {
+  const poses = [...POSES, { tiltDeg: 35, D: 3500, f: 1300, panDeg: 70, aim: [-600, -300] }];
+  const { urls, deps } = scene(poses);
+  const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
+  assert.equal(r.ok, true, r.ask);
+  assert.equal(r.combined.ok, true, r.note);
+  near(sqftOf(r), 120, 0.08, 'area');
+  const [w, l] = r.numbers.find((n) => n.label === 'Floor').value.split(' × ').map(feetOf);
+  near(w, 10, 0.05, 'width'); near(l, 12, 0.05, 'length');
+  assert.ok(r.combined.fill >= 0.9, `fill ${r.combined.fill}`);
+});
+
+test('a photo with the paper too small or too far is a retake of that photo, never a blown-up floor', async () => {
+  // Review A's probe: tilt 28 from the far doorway puts the paper at about 60 px; its map blew a 8 × 14 ft room up to 4e43 mm².
+  const room = rectShape(0, 0, 2438, 4267, 0);
+  const paper = rectShape(-2438 / 2 + 300 + 108, -4267 / 2 + 600 + 140, 279.4, 215.9, 90);
+  const poses = [{ tiltDeg: 28, D: 3800, f: 1300, panDeg: 0, aim: [0, -700] }, { tiltDeg: 28, D: 3800, f: 1300, panDeg: 180, aim: [0, 700] }];
+  const { urls, deps } = scene(poses, { floor: [room, room], paper: [paper, paper] });
+  const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
+  assert.equal(r.ok, false);
+  assert.equal(r.photo, 2);
+  assert.match(r.ask, /^I couldn’t measure photo 2 of 2: the (?:paper is too small or too far away|floor came out impossibly big).*Retake that one, and leave the paper where it is\.$/);
+  assert.ok(!r.pipeline.some((s) => s.model === 'first-answer math' && s.result && !s.result.withheld));
+});
+
+test('a union that does not fill a rectangle (a cross of misaligned floors, or an L) is not called a room', () => {
+  const L = 279.4, S = 215.9;
+  const rect = (x0, x1, y0, y1) => ({ ok: true, paper: { long: L, short: S }, plusMinusPct: 0.03, confidence: 'good', notes: [], areaMm2: (x1 - x0) * (y1 - y0), bounds: { x0, x1, y0, y1 }, sample: (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1 });
+  const across = rect(-1500, 1500, -400, 400), along = rect(-400, 400, -1500, 1500);
+  const c = combineFloors([across, along]);
+  assert.equal(c.ok, false);
+  assert.equal(c.refused, null);
+  assert.ok(c.fill < 0.6, `fill ${c.fill}`);
+  const ok = combineFloors([rect(-200, 1500, -800, 1200), rect(1300, 3000, -800, 1200)]);
+  assert.equal(ok.ok, true);
+  assert.ok(ok.fill >= 0.98, `fill ${ok.fill}`);
 });
 
 test('the 180° ambiguity: a photo whose paper frame comes out turned around is put back by overlap', () => {
@@ -115,13 +197,16 @@ test('no paper in photo 2: it names the photo and asks for that one again', asyn
   const r = await measureAnything({ dataUrls: urls, text: 'tile for this floor', deps });
   assert.equal(r.ok, false);
   assert.equal(r.photo, 2);
-  assert.match(r.ask, /^I couldn’t find the sheet of printer paper in photo 2 of 3\. Leave the sheet of paper where it is and shoot the floor from another doorway or corner\. Retake that one with the whole sheet of printer paper in the shot\.$/);
-  assert.equal(r.overlays.length, 2); // photos 1 and 2 were outlined before it stopped
+  assert.match(r.ask, /^I couldn’t find the sheet of printer paper in photo 2 of 3\. Retake that one with the whole sheet in the shot, and leave the paper where it is\.$/);
+  assert.equal(r.overlays.length, 3); // every photo's outlines, the one after the failing photo too
   assert.ok(!r.numbers.length && !r.headline);
+  // No number anywhere: our math's steps for the other photos are withheld in the panel.
+  assert.ok(!r.pipeline.some((s) => s.model === 'first-answer math' && s.result && !s.result.withheld), JSON.stringify(r.pipeline.map((s) => [s.step, s.result])));
+  assert.doesNotMatch(r.pipeline.map(stepDetail).join(' '), /\d+ sq ft|floor seen/);
   // No floor in photo 3 says so too.
   const r3 = await measureAnything({ dataUrls: urls, text: 'tile', deps: scene(POSES, { floor: [ROOM, ROOM, null] }).deps });
   assert.equal(r3.ok, false);
-  assert.match(r3.ask, /^I couldn’t find the floor in photo 3 of 3\./);
+  assert.match(r3.ask, /^I couldn’t find the floor in photo 3 of 3\. Retake that one with more of the floor and the whole sheet in the shot, and leave the paper where it is\.$/);
 });
 
 test('a photo of a different floor (or a moved paper) is refused: the best single photo answers, with a note', async () => {
@@ -173,7 +258,7 @@ test('a Spanish question gets the combined card in Spanish', async () => {
   assert.match(r.ask, /Combinado de 3 fotos/);
   assert.ok(r.overlays.every((o) => o.outlines.some((x) => x.label === 'hoja de papel')));
   const missing = await measureAnything({ dataUrls: urls, text: 'baldosas', deps: { ...scene(POSES, { paper: [PAPER, null, PAPER] }).deps, read: async () => R({ language: 'es' }) } });
-  assert.match(missing.ask, /^No encontré la hoja de papel en la foto 2 de 3\. Deja la hoja de papel donde está/);
+  assert.match(missing.ask, /^No encontré la hoja de papel en la foto 2 de 3\. Vuelve a tomar esa con la hoja completa en la foto, y deja la hoja donde está\.$/);
 });
 
 test('several photos with a task that is not a floor: the first photo is measured and the note says so', async () => {

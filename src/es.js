@@ -7,7 +7,7 @@ const NOUN = {
   chip: 'el impacto', crack: 'la grieta', foot: 'el pie', floor: 'el piso', driveway: 'la entrada', patio: 'el patio',
   walkway: 'el camino', sidewalk: 'la acera', slab: 'la losa', 'pool deck': 'el borde de la piscina', 'parking pad': 'el estacionamiento',
   fence: 'la cerca', 'house wall': 'la pared de la casa', 'garage door': 'la puerta del garaje', door: 'la puerta', 'front door': 'la puerta de entrada',
-  quarter: 'la moneda de un cuarto de dólar', 'sheet of printer paper': 'la hoja de papel', 'gift or hotel card': 'la tarjeta',
+  quarter: 'la moneda de un cuarto de dólar', 'sheet of printer paper': 'la hoja de papel', sheet: 'la hoja', 'gift or hotel card': 'la tarjeta',
   'double garage door': 'la puerta de garaje doble', 'single garage door': 'la puerta de garaje sencilla', coin: 'la moneda', 'sheet of paper': 'la hoja de papel',
 };
 const RULER = {
@@ -92,6 +92,15 @@ const PHRASES = [
   ['It’s within measuring error of the repair limit, so have a shop look before deciding.', 'Está dentro del margen de error del límite para reparar; que lo revise un taller antes de decidir.'],
   ['Measured from one photo — check one wall with a tape before cutting.', 'Medido con una sola foto: revisa una pared con cinta antes de cortar.'],
   ['Leave the sheet of paper where it is and shoot the floor from another doorway or corner.', 'Deja la hoja de papel donde está y toma el piso desde otra puerta u otra esquina.'],
+  // reasons a photo could not be mapped (flat.js and floor.js)
+  ['the paper is too small or too far away in this photo to trust; get closer to it', 'la hoja se ve muy pequeña o muy lejos en esta foto para confiar; acércate a ella'],
+  ['the floor came out impossibly big, so the paper was read wrong; get closer to it', 'el piso salió imposiblemente grande, así que la hoja se leyó mal; acércate a ella'],
+  ['the floor outline does not reach the paper', 'el contorno del piso no llega a la hoja'],
+  ['could not read the paper outline', 'no se pudo leer el contorno de la hoja'],
+  ['ruler too small in the photo; move closer', 'la referencia se ve muy pequeña en la foto; acércate'],
+  ['could not read the ruler outline', 'no se pudo leer el contorno de la referencia'],
+  ['nothing to measure found', 'no se encontró nada que medir'],
+  ['need the thing, a ruler and its kind', 'faltan la cosa, una referencia y su tipo'],
   ['Only the first photo was measured: several photos at once are for a floor, with the same sheet of paper in every shot.', 'Solo se midió la primera foto: varias fotos a la vez son para un piso, con la misma hoja de papel en todas.'],
   ['For an exact number, take the photo with a door in it, standing on the same ground.', 'Para un número exacto, toma la foto con una puerta parada en el mismo piso.'],
   ['For an exact number, include a door standing on the same ground.', 'Para un número exacto, incluye una puerta parada en el mismo piso.'],
@@ -134,12 +143,16 @@ const RULES = [
     `El piso mide unos ${units(m[1])} por ${units(m[2])} (${m[3]} pies cuadrados)${m[4] ? `, combinando ${m[4]} fotos sobre el plano de la hoja de papel` : ''}. Con baldosas de ${m[5]} × ${m[6]} pulg. son ${m[7]} baldosas colocadas, más ${m[8]}% extra para cortes y errores: compra ${m[9]} baldosas.`],
   [/^(\d+) photos$/, (m) => `${m[1]} fotos`],
   [/^Combined from (\d+) photos — check one wall with a tape before cutting\.$/, (m) => `Combinado de ${m[1]} fotos: revisa una pared con cinta antes de cortar.`],
-  [/^The photos weren’t combined: photo (\S+) doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved\. This answer is from photo (\d+) alone\. (.+)$/, (m) =>
+  [/^The photos weren’t combined: photo (\d+) doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved\. This answer is from photo (\d+) alone\. (.+)$/, (m) =>
     `No se combinaron las fotos: la foto ${m[1]} no toca el piso que se ve en las otras, así que puede ser otro piso o la hoja se movió. Esta respuesta es solo de la foto ${m[2]}. ${es(m[3])}`],
-  [/^I couldn’t find the (.+?) in photo (\d+) of (\d+)\. (.+?) Retake that one with the whole (.+?) in the shot\.$/, (m) =>
-    `No encontré ${noun(m[1])} en la foto ${m[2]} de ${m[3]}. ${es(m[4])} Vuelve a tomar esa con ${noun(m[5])} ${whole(m[5])} en la foto.`],
-  [/^I couldn’t measure photo (\d+) of (\d+): (.+?)\. (.+?) Retake that one with the whole (.+?) in the shot\.$/, (m) =>
-    `No pude medir la foto ${m[1]} de ${m[2]}: ${es(m[3])}. ${es(m[4])} Vuelve a tomar esa con ${noun(m[5])} ${whole(m[5])} en la foto.`],
+  [/^I couldn’t find the (.+?) in photo (\d+) of (\d+)\. Retake that one with the whole (.+?) in the shot, and leave the paper where it is\.$/, (m) =>
+    `No encontré ${noun(m[1])} en la foto ${m[2]} de ${m[3]}. Vuelve a tomar esa con ${noun(m[4])} ${whole(m[4])} en la foto, y deja la hoja donde está.`],
+  [/^I couldn’t find the (.+?) in photo (\d+) of (\d+)\. Retake that one with more of the (.+?) and the whole (.+?) in the shot, and leave the paper where it is\.$/, (m) =>
+    `No encontré ${noun(m[1])} en la foto ${m[2]} de ${m[3]}. Vuelve a tomar esa con más de ${noun(m[4])} y ${noun(m[5])} ${whole(m[5])} en la foto, y deja la hoja donde está.`],
+  [/^I couldn’t measure photo (\d+) of (\d+): (.+?)\. Retake that one, and leave the paper where it is\.$/, (m) =>
+    `No pude medir la foto ${m[1]} de ${m[2]}: ${es(m[3])}. Vuelve a tomar esa, y deja la hoja donde está.`],
+  [/^The photos weren’t combined: the floor seen in the photos fills only (\d+)% of a rectangle, so either the room isn’t a rectangle or a photo didn’t line up\. This answer is from photo (\d+) alone\. (.+)$/, (m) =>
+    `No se combinaron las fotos: el piso que se ve en las fotos llena solo el ${m[1]}% de un rectángulo, así que o el cuarto no es rectangular o una foto no cuadró. Esta respuesta es solo de la foto ${m[2]}. ${es(m[3])}`],
   [/^(\d+) tiles, (.+?) × (.+?) in \(same lot number on every box\)$/, (m) => `${m[1]} baldosas de ${m[2]} × ${m[3]} pulg. (mismo número de lote en todas las cajas)`],
   [/^Start at the center of the room: (.+) across, (.+) along\.$/, (m) => `Empieza en el centro del cuarto: ${tileAxis(m[1])} a lo ancho, ${tileAxis(m[2])} a lo largo.`],
   [/^(\d+) × (edge pieces along the two side walls|edge pieces along the two end walls|corner pieces): (.+)\.$/, (m) => `${m[1]} × ${{ 'edge pieces along the two side walls': 'piezas de borde junto a las dos paredes laterales', 'edge pieces along the two end walls': 'piezas de borde junto a las dos paredes de los extremos', 'corner pieces': 'piezas de esquina' }[m[2]]}: ${es(m[3])}.`],

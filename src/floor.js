@@ -26,7 +26,9 @@ import { rulerMap, maskBoundary, measureFlat, applyH } from './flat.js';
 export const CELL_MM = 25;
 export const MAX_GAP_MM = 1000;
 export const MAX_PHOTOS = 4;
-const REACH_MM = 15000; // nothing on the floor is more than 15 m from the paper; farther points are mask noise near the horizon
+export const MIN_FILL = 0.9; // the union must fill at least this much of its bounding rectangle to be called a room
+const REACH_MM = 15000; // nothing on the floor is more than 15 m from the paper; farther points are a blown-up map
+const MAX_AREA_MM2 = 200e6; // 200 m²: no room a sheet of paper can measure is bigger
 
 // Inverse of a 3×3 homography (row-major, 9 numbers).
 export function invertH(H) {
@@ -45,10 +47,14 @@ export function invertH(H) {
  * Returns { ok, sample(x, y), bounds, paper: { long, short }, areaMm2, plusMinusPct, confidence, notes, clipped, measured }.
  *   sample(x, y) says whether the point (mm on the paper's plane, long edge along x) is floor in this photo.
  */
-export function floorOnPaper({ target, ref, refKind = 'paper_letter' }) {
-  const m = measureFlat({ target, ref, refKind });
+export function floorOnPaper({ target, ref, refKind = 'paper_letter', focal35 = null }) {
+  const m = measureFlat({ target, ref, refKind, focal35 });
   if (!m.ok) return { ok: false, reason: m.reason };
-  const map = rulerMap(ref, refKind);
+  // Sanity bounds: a paper that is too small or too far reads as a bent shape and blows the map up (a
+  // 2 m × 2 m floor became 4e43 mm² in a probe). Such a photo is retaken, never combined.
+  if (m.notes.some((n) => /ruler shape/.test(n))) return { ok: false, reason: 'the paper is too small or too far away in this photo to trust; get closer to it' };
+  if (m.areaMm2 > MAX_AREA_MM2) return { ok: false, reason: 'the floor came out impossibly big, so the paper was read wrong; get closer to it' };
+  const map = rulerMap(ref, refKind, { focal35 });
   if (!map?.H || !map.extentMm) return { ok: false, reason: 'could not read the paper outline' };
   const Hi = invertH(map.H);
   if (!Hi) return { ok: false, reason: 'could not read the paper outline' };
@@ -76,16 +82,16 @@ export function floorOnPaper({ target, ref, refKind = 'paper_letter' }) {
 
   let bpts = maskBoundary(target);
   if (!bpts.length) bpts = [[box.x1, box.y1], [box.x2 + 1, box.y1], [box.x2 + 1, box.y2 + 1], [box.x1, box.y2 + 1]];
-  const plane = bpts.map(toPlane).filter(([x, y]) => Math.hypot(x - L / 2, y - S / 2) <= REACH_MM);
+  const plane = bpts.map(toPlane);
+  if (plane.some(([x, y]) => !(Math.hypot(x - L / 2, y - S / 2) <= REACH_MM))) return { ok: false, reason: 'the floor came out impossibly big, so the paper was read wrong; get closer to it' };
   if (plane.length < 3) return { ok: false, reason: 'the floor outline does not reach the paper' };
   const bounds = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
   for (const [x, y] of plane) { if (x < bounds.x0) bounds.x0 = x; if (x > bounds.x1) bounds.x1 = x; if (y < bounds.y0) bounds.y0 = y; if (y > bounds.y1) bounds.y1 = y; }
   // In a multi-photo floor every photo is expected to see only part of the floor, so a floor that runs
   // off the photo's edge is normal here, not a reason for a wider range (measureFlat adds 8% for it).
-  const shapeOff = m.notes.some((n) => /ruler shape/.test(n));
   const notes = m.notes.filter((n) => !/runs off the edge/.test(n));
-  const plusMinusPct = m.clipped && !shapeOff ? Math.max(0.03, Math.round((m.plusMinusPct - 0.08) * 1000) / 1000) : m.plusMinusPct;
-  return { ok: true, sample, bounds, paper: { long: L, short: S }, areaMm2: m.areaMm2, plusMinusPct, confidence: shapeOff ? 'low' : 'good', notes, clipped: m.clipped, measured: m };
+  const plusMinusPct = m.clipped ? Math.max(0.03, Math.round((m.plusMinusPct - 0.08) * 1000) / 1000) : m.plusMinusPct;
+  return { ok: true, sample, bounds, paper: { long: L, short: S }, areaMm2: m.areaMm2, plusMinusPct, confidence: 'good', notes, clipped: m.clipped, measured: m };
 }
 
 // Cells as integer keys (cell indices can be negative: the paper is somewhere in the room, not at a corner).
@@ -130,10 +136,13 @@ function gapMm(a, b, cellMm) {
 
 /**
  * Combine the floors of several photos (each from floorOnPaper) into one floor on the paper's plane.
- * Returns { ok, areaMm2, sqft, widthMm, lengthMm, cells, photos: [{ flipped, coverage, overlapCells }], plusMinusPct }
- * or, when a photo's floor is more than maxGapMm from the others, { ok: false, refused: <photo index>, gapMm }.
+ * Returns { ok, areaMm2, sqft, widthMm, lengthMm, fill, cells, photos: [{ flipped, coverage, overlapCells }], plusMinusPct }
+ * or { ok: false, refused: <photo index>, gapMm } when a photo's floor is more than maxGapMm from the others,
+ * or { ok: false, refused: null, fill } when the union fills less than minFill of its bounding rectangle
+ * (an L-shaped room, or a photo that did not line up: a room is a rectangle, and a misplaced photo
+ * makes a cross that fills far less of one).
  */
-export function combineFloors(photos, { cellMm = CELL_MM, maxGapMm = MAX_GAP_MM } = {}) {
+export function combineFloors(photos, { cellMm = CELL_MM, maxGapMm = MAX_GAP_MM, minFill = MIN_FILL } = {}) {
   if (!photos.length) return { ok: false, reason: 'no photos' };
   let union = null;
   const placed = [];
@@ -160,9 +169,13 @@ export function combineFloors(photos, { cellMm = CELL_MM, maxGapMm = MAX_GAP_MM 
   for (const k of union) { const [i, j] = unkey(k); if (i < i0) i0 = i; if (i > i1) i1 = i; if (j < j0) j0 = j; if (j > j1) j1 = j; }
   const areaMm2 = union.size * cellMm * cellMm;
   const xMm = (i1 - i0 + 1) * cellMm, yMm = (j1 - j0 + 1) * cellMm;
+  const fill = Math.round((areaMm2 / (xMm * yMm)) * 100) / 100;
+  const placed2 = placed.map((q) => ({ flipped: q.flipped, coverage: Math.round((q.cells.size / union.size) * 100) / 100, overlapCells: q.overlapCells, gapMm: q.gapMm || 0 }));
+  if (fill < minFill) return { ok: false, refused: null, fill, sqft: Math.round(areaMm2 / 92903.04), widthMm: Math.min(xMm, yMm), lengthMm: Math.max(xMm, yMm), photos: placed2 };
   return {
     ok: true,
     areaMm2,
+    fill,
     sqft: Math.round(areaMm2 / 92903.04),
     widthMm: Math.min(xMm, yMm),
     lengthMm: Math.max(xMm, yMm),
@@ -170,6 +183,6 @@ export function combineFloors(photos, { cellMm = CELL_MM, maxGapMm = MAX_GAP_MM 
     cells: union.size,
     // The far part of each mask is the least precise, so the combined range is never tighter than the worst photo's.
     plusMinusPct: Math.max(...photos.map((p) => p.plusMinusPct || 0)),
-    photos: placed.map((q) => ({ flipped: q.flipped, coverage: Math.round((q.cells.size / union.size) * 100) / 100, overlapCells: q.overlapCells, gapMm: q.gapMm || 0 })),
+    photos: placed2,
   };
 }

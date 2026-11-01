@@ -306,7 +306,7 @@ async function measureAll({ dataUrl, dataUrls = null, text = '', focal35 = null,
     const rd = await readTask({ dataUrl, text, live, pipeline });
     if (rd.done) return rd.done;
     if (rd.read.task === 'floor_tile') {
-      r = await floorMultiFlow({ dataUrls: urls, text, live, read: rd.read, pipeline, wordTimeoutMs, checkTimeoutMs });
+      r = await floorMultiFlow({ dataUrls: urls, text, live, read: rd.read, pipeline, focal35, wordTimeoutMs, checkTimeoutMs });
       if (!r.ok) return r;
       return checkAndWord({ r, dataUrl, text, focal35, live, pipeline, sam, wordTimeoutMs, checkTimeoutMs });
     }
@@ -526,7 +526,7 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
   if (!target) return finishErr(read, pipeline, `I couldn’t find the ${concepts[0]} in that photo. Try again closer, with it in the middle.`, null, overlay);
   if (!ruler) return finishErr(read, pipeline, `I need something of known size next to it: lay a ${read.task === 'windshield_chip' ? 'quarter' : read.task === 'size' ? 'gift card or a quarter' : 'sheet of printer paper'} right beside it and send one more.`, null, overlay);
   const refKind = FLAT_REFERENCES[read.ruler] ? read.ruler : read.task === 'windshield_chip' ? 'quarter' : 'paper_letter';
-  const m = measureFlat({ target, ref: ruler, refKind });
+  const m = measureFlat({ target, ref: ruler, refKind, focal35 });
   pipeline.add({ model: 'first-answer math', step: `measure against the ${FLAT_REFERENCES[refKind].label}`, result: m });
   if (!m.ok) return finishErr(read, pipeline, m.reason, null, overlay);
   const line = longestLine(target);
@@ -645,13 +645,16 @@ function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], 
 export const MULTI_PAPER_TIP = 'Leave the sheet of paper where it is and shoot the floor from another doorway or corner.';
 const SQFT_PER_MM2 = 1 / 92903.04;
 
-async function floorMultiFlow({ dataUrls, text, live, read, pipeline, wordTimeoutMs, checkTimeoutMs }) {
+async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = null, wordTimeoutMs, checkTimeoutMs }) {
   const n = dataUrls.length;
   const refKind = FLAT_REFERENCES[read.ruler]?.shape === 'rect' ? read.ruler : 'paper_letter';
   const R = FLAT_REFERENCES[refKind];
   const concepts = [read.target || 'floor', R.samConcept];
   const label = (i) => `photo ${i + 1} of ${n}`;
-  const retake = (i, why) => `I couldn’t find the ${why} in ${label(i)}. ${MULTI_PAPER_TIP} Retake that one with the whole ${why} in the shot.`;
+  const sheet = /paper/.test(R.label) ? 'sheet' : R.label;
+  const retake = (i, why) => (why === R.label
+    ? `I couldn’t find the ${why} in ${label(i)}. Retake that one with the whole ${sheet} in the shot, and leave the paper where it is.`
+    : `I couldn’t find the ${why} in ${label(i)}. Retake that one with more of the ${why} and the whole ${sheet} in the shot, and leave the paper where it is.`);
 
   // 2. Outline the floor and the paper in every photo, all at once (one step per photo as it comes back).
   const t0 = performance.now();
@@ -666,46 +669,61 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, wordTimeou
     return finishErr(read, pipeline, samDown(e));
   }
 
-  // 3. Map each photo's floor onto the paper's plane.
-  const overlays = [], photos = [];
+  // Every photo's outlines go to the page and to Spark's check, whatever happens next.
+  const overlays = [], found = [];
   pipeline.checks = [];
-  // The page draws r.overlay on the first photo and overlays[i] on photo i + 1, so the main overlay is always photo 1's.
-  const fail = (i, ask) => ({ ...finishErr(read, pipeline, ask, null, overlays[0]), overlays, photo: i + 1 });
   for (let i = 0; i < n; i++) {
     const [tSeg, rSeg] = segs[i];
     const frame = tSeg.frame || rSeg.frame;
     const target = best(tSeg.objects), ruler = best(rSeg.objects);
+    found.push({ target, ruler });
     overlays.push({ frame, outlines: [outlineOf(target, concepts[0], 'target'), outlineOf(ruler, rulerLabel(refKind), 'ruler')].filter(Boolean), lines: [], photo: i + 1 });
     pipeline.checks.push({ dataUrl: dataUrls[i], label: label(i), frame, items: [
       target && { role: 'target', obj: target, name: `the ${concepts[0]}`, expect: `the ${concepts[0]} the person wants measured` },
       ruler && { role: 'ruler', obj: ruler, name: `a ${R.label}`, expect: `a ${rulerSpec(refKind)}`, ruler: refKind },
     ].filter(Boolean) });
-    if (!target) return fail(i, retake(i, concepts[0]));
-    if (!ruler) return fail(i, retake(i, R.label));
-    const f = floorOnPaper({ target, ref: ruler, refKind });
+  }
+  // A refused answer shows no number anywhere: our math's steps for the other photos are withheld too.
+  // The page draws r.overlay on the first photo and overlays[i] on photo i + 1, so the main overlay is always photo 1's.
+  const fail = (i, ask) => {
+    for (const p of pipeline) if (p.model === 'first-answer math' && p.result) { p.result = { withheld: true }; delete p.error; }
+    return { ...finishErr(read, pipeline, ask, null, overlays[0]), overlays, photo: i + 1 };
+  };
+  for (let i = 0; i < n; i++) {
+    if (!found[i].target) return fail(i, retake(i, concepts[0]));
+    if (!found[i].ruler) return fail(i, retake(i, R.label));
+  }
+
+  // 3. Map each photo's floor onto the paper's plane.
+  const photos = [];
+  for (let i = 0; i < n; i++) {
+    const f = floorOnPaper({ target: found[i].target, ref: found[i].ruler, refKind, focal35 });
     pipeline.add({ model: 'first-answer math', step: `${label(i)}: map the floor onto the ${R.label}’s plane`, result: f.ok ? { sqftSeen: Math.round(f.areaMm2 * SQFT_PER_MM2), plusMinusPct: f.plusMinusPct, confidence: f.confidence } : { ok: false, reason: f.reason } });
-    if (!f.ok) return fail(i, `I couldn’t measure ${label(i)}: ${f.reason}. ${MULTI_PAPER_TIP} Retake that one with the whole ${R.label} in the shot.`);
+    if (!f.ok) return fail(i, `I couldn’t measure ${label(i)}: ${f.reason}. Retake that one, and leave the paper where it is.`);
     photos.push(f);
   }
 
   // 4. Combine. A photo whose floor is more than a meter from the others is not the same floor (or
-  // the paper moved): the best single photo answers instead, and the note says why.
+  // the paper moved), and a union that does not fill a rectangle is not a room (an L shape, or a photo
+  // that did not line up): the best single photo answers instead, and the note says why.
   const c = combineFloors(photos);
   const base = { task: read.task, read, pipeline, measuredAgainst: rulerSpec(refKind), overlays };
   if (!c.ok) {
-    pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { combined: false, photo: c.refused != null ? c.refused + 1 : null, gapMm: c.gapMm ?? null, why: c.reason || 'does not touch the floor in the other photos' } });
-    const k = photos.indexOf(photos.reduce((a, b) => (b.areaMm2 > a.areaMm2 ? b : a)));
+    const why = c.refused != null ? `photo ${c.refused + 1} doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved` : `the floor seen in the photos fills only ${Math.round((c.fill || 0) * 100)}% of a rectangle, so either the room isn’t a rectangle or a photo didn’t line up`;
+    pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { combined: false, photo: c.refused != null ? c.refused + 1 : null, gapMm: c.gapMm ?? null, fill: c.fill ?? null, why: c.refused != null ? 'does not touch the floor in the other photos' : `fills only ${Math.round((c.fill || 0) * 100)}% of a rectangle` } });
+    // The best single photo: the tightest range, then the most floor seen.
+    const k = photos.indexOf(photos.reduce((a, b) => (b.plusMinusPct < a.plusMinusPct || (b.plusMinusPct === a.plusMinusPct && b.areaMm2 > a.areaMm2) ? b : a)));
     const m = photos[k].measured;
     const r = tileAnswer({ ...base, overlay: overlays[0], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: m.plusMinusPct, confidence: m.confidence, notes: m.notes });
-    r.note = `The photos weren’t combined: photo ${c.refused != null ? c.refused + 1 : '?'} doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved. This answer is from photo ${k + 1} alone. ${MULTI_PAPER_TIP}`;
-    r.combined = { photos: n, ok: false, from: k + 1 };
+    r.note = `The photos weren’t combined: ${why}. This answer is from photo ${k + 1} alone. ${MULTI_PAPER_TIP}`;
+    r.combined = { photos: n, ok: false, from: k + 1, fill: c.fill ?? null };
     return r;
   }
   const coverage = c.photos.map((p, i) => `photo ${i + 1} ${Math.round(p.coverage * 100)}%`).join(', ');
-  pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { sqftSeen: c.sqft, widthFt: Math.round((c.widthMm / 304.8) * 10) / 10, lengthFt: Math.round((c.lengthMm / 304.8) * 10) / 10, coverage, turned: c.photos.filter((p) => p.flipped).length, plusMinusPct: c.plusMinusPct } });
+  pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { sqftSeen: c.sqft, widthFt: Math.round((c.widthMm / 304.8) * 10) / 10, lengthFt: Math.round((c.lengthMm / 304.8) * 10) / 10, fill: `${Math.round(c.fill * 100)}%`, coverage, turned: c.photos.filter((p) => p.flipped).length, plusMinusPct: c.plusMinusPct } });
   const notes = [...new Set(photos.flatMap((p) => p.notes))];
   const r = tileAnswer({ ...base, overlay: overlays[0], roomW: c.widthMm / 25.4, roomL: c.lengthMm / 25.4, plusMinusPct: c.plusMinusPct, confidence: photos.every((p) => p.confidence === 'good') ? 'good' : 'low', notes, photos: n });
-  r.combined = { photos: n, ok: true, sqft: c.sqft, coverage: c.photos.map((p) => p.coverage), turned: c.photos.map((p) => p.flipped) };
+  r.combined = { photos: n, ok: true, sqft: c.sqft, fill: c.fill, coverage: c.photos.map((p) => p.coverage), turned: c.photos.map((p) => p.flipped) };
   return r;
 }
 
@@ -1180,9 +1198,9 @@ export function stepDetail(s) {
   }
   if (r.withheld) return 'measured, but not sent: Spark disagreed with the outlines';
   if (r.corrected === false) return `nothing new from SAM (${r.why}); no number sent`;
-  if (r.combined === false) return `not combined: photo ${r.photo} ${r.why}${r.gapMm ? ` (${Math.round(r.gapMm / 304.8 * 10) / 10} ft away)` : ''}; best single photo used`;
+  if (r.combined === false) return `not combined: ${r.photo ? `photo ${r.photo} ${r.why}` : `the union ${r.why}`}${r.gapMm ? ` (${Math.round(r.gapMm / 304.8 * 10) / 10} ft away)` : ''}; best single photo used`;
   if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}${r.language === 'es' ? ' · language: Spanish' : ''}`;
-  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)', sqftSeen: 'floor seen (sq ft)', turned: 'turned 180°' };
+  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)', sqftSeen: 'floor seen (sq ft)', turned: 'turned 180°', fill: 'fills a rectangle' };
   const pretty = (k) => NAMED[k] || k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\s?Mm2\b/, ' mm²').replace(/\s?Mm\b/, ' mm').replace(/\s?Ft\b/, ' ft').replace(/\s?In2\b/, ' sq in').replace(/\s?Pct\b/, ' %').toLowerCase();
   const keep = Object.entries(r).filter(([k, v]) => !['ok', 'notes', 'reason', 'clipped'].includes(k) && v != null && ['number', 'string', 'boolean'].includes(typeof v));
   return keep.slice(0, 5).map(([k, v]) => `${pretty(k)}: ${typeof v === 'number' ? (k.endsWith('Pct') ? `±${Math.round(v * 100)}%` : Math.round(v * 100) / 100) : v}`).join(' · ');
