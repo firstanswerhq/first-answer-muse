@@ -1,6 +1,8 @@
 // First Answer Sight ("See it. Size it. Solve it."): text one photo, get a measurement back.
 // Muse Spark reads the photo, SAM 3.1 outlines the objects, our math turns
 // pixels into inches using an everyday object in the shot as the ruler.
+// A floor can be sent as 2 to 4 photos from different doorways with one sheet of paper left in place;
+// the server combines them on the paper's plane and the reply shows every photo with SAM's masks.
 
 const $ = (id) => document.getElementById(id);
 const thread = $('thread');
@@ -23,18 +25,22 @@ const SAMPLES = [
 const FACE = { id: 'face', label: 'Face', text: 'Gift card flat on my forehead. Measure my eye spacing.' };
 
 // The waiting steps light up as the server reports each one finished (streamed), not on a timer.
-const WAIT_STEPS = [
+// With several photos of a floor there is one more: combining them on the paper's plane.
+const waitSteps = (n) => [
   ['spark', 'Muse Spark', 'reading the photo and the question'],
-  ['sam', 'SAM 3.1', 'outlining the objects'],
-  ['math', 'Our geometry', 'measuring against the ruler'],
-  ['spark', 'Muse Spark', 'checking SAM’s outlines and wording the answer'],
+  ['sam', 'SAM 3.1', n > 1 ? `outlining the floor and the paper in ${n} photos` : 'outlining the objects'],
+  ['math', 'Our geometry', n > 1 ? 'mapping each floor onto the paper’s plane' : 'measuring against the ruler'],
+  ...(n > 1 ? [['math', 'Our geometry', `combining ${n} photos into one floor`]] : []),
+  ['spark', 'Muse Spark', n > 1 ? 'checking SAM’s outlines in every photo and wording the answer' : 'checking SAM’s outlines and wording the answer'],
 ];
 // Which waiting step a finished pipeline step completes (0-based index of the step that is done).
-function stageOf(step) {
-  const k = modelInfo(step.model)[0];
-  if (/routed/.test(step.step || '')) return 0;
-  if (k === 'spark') return /word/.test(step.step || '') ? 3 : 0;
+function stageOf(step, n = 1) {
+  const k = modelInfo(step.model)[0], what = step.step || '';
+  const last = n > 1 ? 4 : 3;
+  if (/routed/.test(what)) return 0;
+  if (k === 'spark') return /word/.test(what) ? last : 0;
   if (k === 'sam') return 1;
+  if (n > 1 && /^combine|tile layout/.test(what)) return 3;
   return 2;
 }
 
@@ -86,32 +92,55 @@ async function headB64(blob) {
   return btoa(s);
 }
 
-// ---------- staged photo ----------
-let staged = null; // { blob, preview }
-function stage(blob) {
-  if (staged?.preview) URL.revokeObjectURL(staged.preview);
-  staged = { blob, preview: URL.createObjectURL(blob) };
-  $('stagedImg').src = staged.preview;
-  $('staged').classList.remove('hidden');
-  document.querySelector('.m-cam').classList.add('armed');
+// ---------- staged photos ----------
+// One photo for anything; up to MAX_PHOTOS of one floor (the Tile floor chip, or a message about a floor),
+// with the same sheet of paper left in place in every shot.
+const MAX_PHOTOS = 4;
+let staged = []; // [{ blob, preview }]
+let floorChip = false; // the Tile floor chip was tapped for this message
+const FLOOR_WORDS = /\b(?:tiles?|tiling|floor|flooring|piso|baldosas?|azulejos?|losetas?)\b/i;
+const floorMode = () => floorChip || FLOOR_WORDS.test(textIn.value);
+function renderStaged() {
+  const box = $('stagedThumbs');
+  box.innerHTML = staged.map((s, i) => `<span class="m-thumb"><img src="${s.preview}" alt="Photo ${i + 1} ready to send">${staged.length > 1 ? `<i>${i + 1}</i>` : ''}</span>`).join('');
+  const n = staged.length;
+  $('stagedMsg').textContent = n > 1 ? `${n} photos of the floor ready. Add a question and tap Send.` : 'Photo ready. Add a question and tap Send.';
+  const canAdd = n > 0 && n < MAX_PHOTOS && floorMode();
+  $('addPhoto').classList.toggle('hidden', !canAdd);
+  $('addPhoto').textContent = n > 1 ? `Add another photo of the same floor (${n} of ${MAX_PHOTOS})` : 'Add another photo of the same floor';
+  $('addTip').classList.toggle('hidden', !(n > 0 && floorMode()));
+  $('staged').classList.toggle('hidden', n === 0);
+  document.querySelector('.m-cam').classList.toggle('armed', n > 0);
+}
+function stage(blob, { add = false } = {}) {
+  // In floor mode a new photo joins the others (up to 4); otherwise it replaces the staged one.
+  if (!add || !floorMode() || staged.length >= MAX_PHOTOS) { for (const s of staged) URL.revokeObjectURL(s.preview); staged = []; }
+  staged.push({ blob, preview: URL.createObjectURL(blob) });
+  renderStaged();
   textIn.focus();
 }
 function unstage() {
-  if (staged?.preview) URL.revokeObjectURL(staged.preview);
-  staged = null;
-  $('staged').classList.add('hidden');
-  document.querySelector('.m-cam').classList.remove('armed');
+  for (const s of staged) URL.revokeObjectURL(s.preview);
+  staged = [];
+  floorChip = false;
+  renderStaged();
 }
 $('unstage').addEventListener('click', unstage);
+let adding = false;
+$('addPhoto').addEventListener('click', () => { adding = true; $('photoIn').click(); });
 $('photoIn').addEventListener('change', (e) => {
   const f = e.target.files[0];
   e.target.value = '';
-  if (f) stage(f);
+  const add = adding || (staged.length > 0 && floorMode());
+  adding = false;
+  if (f) stage(f, { add });
 });
+// Typing "floor" or "tile" turns on the add-another-photo control for the staged photo.
+textIn.addEventListener('input', () => { if (staged.length) renderStaged(); });
 
 // ---------- waiting chips ----------
-function working(dataUrl) {
-  const el = bubble('them', `${dataUrl ? `<div class="scan"><img src="${dataUrl}" alt=""><span class="beam"></span></div>` : ''}<ol class="pipe">${WAIT_STEPS.map(([k, name, what]) => `<li><span class="spin"></span><span class="mtag ${k}">${name}</span>${what}</li>`).join('')}</ol>`, 'working');
+function working(dataUrl, n = 1) {
+  const el = bubble('them', `${dataUrl ? `<div class="scan"><img src="${dataUrl}" alt=""><span class="beam"></span></div>` : ''}<ol class="pipe">${waitSteps(n).map(([k, name, what]) => `<li><span class="spin"></span><span class="mtag ${k}">${name}</span>${what}</li>`).join('')}</ol>`, 'working');
   const items = [...el.querySelectorAll('li')];
   let at = 0;
   items[0].classList.add('on');
@@ -124,7 +153,7 @@ function working(dataUrl) {
     });
     at = n + 1;
   };
-  return { step: (s) => reached(stageOf(s)), done: () => el.remove() };
+  return { step: (s) => reached(stageOf(s, n)), done: () => el.remove() };
 }
 
 // ---------- annotated photo ----------
@@ -247,7 +276,7 @@ const UI = {
     forBiz: (to) => `For ${to}`, wouldGet: 'What the business would get', job: 'Job size', mats: 'Materials', quote: 'Quote',
     priced: (to) => `Demo price from ${to}’s own price list (a demo business).`, unpriced: (to) => `Not on ${to}’s price list, so the owner prices it.`, never: 'First Answer never makes prices up.', ownerEnglish: '',
     phone: 'Your phone (optional)', phoneLabel: 'Your phone number, optional, so they can text you back', send: (to) => `Send this to ${to}`, sending: 'Sending…', seeBoard: (o) => `See ${o}’s board`, sendFail: 'Couldn’t send it just now. Try again in a moment.',
-    panel: 'How Meta’s models measured it', fixed: ['corrected SAM’s outline →', 'outlined it again → re-measured'],
+    panel: 'How Meta’s models measured it', fixed: ['corrected SAM’s outline →', 'outlined it again → re-measured'], photo: 'Photo',
     conf: { good: 'Measured', fair: 'Close estimate', low: 'Rough — see tip' },
   },
   es: {
@@ -257,7 +286,7 @@ const UI = {
     forBiz: (to) => `Para ${to}`, wouldGet: 'Lo que recibiría el negocio', job: 'Trabajo', mats: 'Materiales', quote: 'Cotización',
     priced: (to) => `Precio de demostración de la lista de ${to} (un negocio de demostración).`, unpriced: (to) => `No está en la lista de precios de ${to}; el dueño le pone precio.`, never: 'First Answer nunca inventa precios.', ownerEnglish: 'El negocio lo recibe en inglés.',
     phone: 'Tu teléfono (opcional)', phoneLabel: 'Tu número de teléfono, opcional, para que te escriban', send: (to) => `Enviar a ${to}`, sending: 'Enviando…', seeBoard: (o) => `Ver el tablero de ${o}`, sendFail: 'No se pudo enviar. Inténtalo de nuevo en un momento.',
-    panel: 'Cómo lo midieron los modelos de Meta', fixed: ['corrigió el contorno de SAM →', 'lo marcó otra vez → medido de nuevo'],
+    panel: 'Cómo lo midieron los modelos de Meta', fixed: ['corrigió el contorno de SAM →', 'lo marcó otra vez → medido de nuevo'], photo: 'Foto',
     conf: { good: 'Medido', fair: 'Estimado cercano', low: 'Aproximado: ve el consejo' },
   },
 };
@@ -269,11 +298,26 @@ function list(items, ordered) {
   return `<${tag}>${items.map((s) => `<li>${esc(s)}</li>`).join('')}</${tag}>`;
 }
 
-function renderReply(r, dataUrl) {
+function renderReply(r, dataUrl, dataUrls = [dataUrl]) {
   const el = bubble('them', '', 'reply');
   const hasOverlay = r.overlay?.frame && ((r.overlay.outlines || []).length || (r.overlay.lines || []).length);
   if (hasOverlay) {
     el.appendChild(annotatedShot(dataUrl, r.overlay, L(r)));
+    // A floor from several photos: the other photos, small, each with SAM's masks for that photo.
+    const more = (r.overlays || []).slice(1).filter((o, i) => o?.frame && dataUrls[i + 1]);
+    if (more.length) {
+      const row = document.createElement('div');
+      row.className = 'shots-more';
+      more.forEach((o, i) => {
+        const shot = annotatedShot(dataUrls[i + 1], o, L(r));
+        const n = document.createElement('span');
+        n.className = 'shot-n';
+        n.textContent = `${L(r).photo} ${o.photo || i + 2}`;
+        shot.appendChild(n);
+        row.appendChild(shot);
+      });
+      el.appendChild(row);
+    }
     const key = shotKey(r);
     if (key) el.appendChild(key);
   }
@@ -440,30 +484,33 @@ function errorBubble(r, retry) {
 }
 
 let busy = false;
-async function send(blob, text, { again = false } = {}) {
+// blobs: one photo, or 2 to 4 photos of one floor (sent as dataUrls; the first is also dataUrl).
+async function send(blobs, text, { again = false } = {}) {
   if (busy) return;
+  blobs = Array.isArray(blobs) ? blobs.slice(0, MAX_PHOTOS) : [blobs];
   busy = true;
   $('sendBtn').disabled = true;
   let wait = null;
   try {
-    const [dataUrl, exifB64] = await Promise.all([toDataUrl(blob), headB64(blob).catch(() => null)]);
+    const [dataUrls, exifB64] = await Promise.all([Promise.all(blobs.map((b) => toDataUrl(b))), headB64(blobs[0]).catch(() => null)]);
+    const dataUrl = dataUrls[0];
     if (!again) {
-      bubble('me', `<img src="${dataUrl}" alt="Photo sent">`, 'photo');
+      bubble('me', `<img src="${dataUrl}" alt="Photo sent">${dataUrls.length > 1 ? `<div class="more">${dataUrls.slice(1).map((u, i) => `<img src="${u}" alt="Photo ${i + 2} sent">`).join('')}</div>` : ''}`, 'photo');
       if (text) bubble('me', esc(text));
     }
-    wait = working(dataUrl);
+    wait = working(dataUrl, dataUrls.length);
     let r;
     try {
-      r = await postMeasure({ dataUrl, text, exifB64 }, (s) => wait.step(s));
+      r = await postMeasure({ dataUrl, ...(dataUrls.length > 1 ? { dataUrls } : {}), text, exifB64 }, (s) => wait.step(s));
     } finally {
       wait.done();
     }
-    if (r && r.ok !== false && (r.headline || r.answer)) renderReply(r, dataUrl);
+    if (r && r.ok !== false && (r.headline || r.answer)) renderReply(r, dataUrl, dataUrls);
     // Not measured, but SAM outlined something: show the photo with the outlines and the tip.
-    else if (r && r.ok === false && !r.retry && r.overlay?.frame && (r.overlay.outlines || []).length) renderReply(r, dataUrl);
-    else errorBubble(r, () => send(blob, text, { again: true }));
+    else if (r && r.ok === false && !r.retry && r.overlay?.frame && (r.overlay.outlines || []).length) renderReply(r, dataUrl, dataUrls);
+    else errorBubble(r, () => send(blobs, text, { again: true }));
   } catch {
-    errorBubble({ ask: FALLBACK_ERR, retry: true }, () => send(blob, text, { again: true }));
+    errorBubble({ ask: FALLBACK_ERR, retry: true }, () => send(blobs, text, { again: true }));
   } finally {
     busy = false;
     $('sendBtn').disabled = false;
@@ -473,17 +520,17 @@ async function send(blob, text, { again = false } = {}) {
 $('compose').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = textIn.value.trim();
-  if (!staged) {
+  if (!staged.length) {
     if (!text) return;
     bubble('me', esc(text));
     textIn.value = '';
     bubble('them', 'Send a photo with that. Tap the camera, and put a gift card, quarter, or sheet of paper in the shot so I have a ruler.');
     return;
   }
-  const { blob } = staged;
+  const blobs = staged.map((s) => s.blob);
   textIn.value = '';
   unstage();
-  send(blob, text);
+  send(blobs, text);
 });
 
 // ---------- sample chips ----------
@@ -509,11 +556,21 @@ function renderChips() {
         const res = await fetch(srv.url).catch(() => null);
         if (!res?.ok) { textIn.value = text; textIn.focus(); return; }
         const blob = await res.blob();
-        textIn.value = '';
         unstage();
+        if (s.id === 'tile') {
+          // The floor chip stages its photo instead of sending it, so more photos of the same floor can
+          // be added ("Add another photo of the same floor") before Send.
+          floorChip = true;
+          textIn.value = text;
+          stage(blob);
+          return;
+        }
+        textIn.value = '';
         send(blob, text);
       } else {
+        floorChip = s.id === 'tile';
         textIn.value = text;
+        if (staged.length) renderStaged();
         textIn.focus();
       }
     });
@@ -534,4 +591,4 @@ fetch('/api/health').then((r) => r.json()).then((h) => {
   if (h.relay === 'direct') $('privacyRoute').textContent = 'Your photo and message go from our server straight to Meta’s Muse Spark and SAM 3.1';
 }).catch(() => {});
 
-bubble('note', 'Text one photo and a question. Put a gift card, quarter, sheet of paper, soda can, or a door in the shot and it becomes the ruler.');
+bubble('note', 'Text one photo and a question. Put a gift card, quarter, sheet of paper, soda can, or a door in the shot and it becomes the ruler. For a whole floor, leave one sheet of paper on it and send up to 4 photos from different doorways.');

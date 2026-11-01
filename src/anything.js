@@ -669,7 +669,8 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, wordTimeou
   // 3. Map each photo's floor onto the paper's plane.
   const overlays = [], photos = [];
   pipeline.checks = [];
-  const fail = (i, ask) => ({ ...finishErr(read, pipeline, ask, null, overlays[i]), overlays, photo: i + 1 });
+  // The page draws r.overlay on the first photo and overlays[i] on photo i + 1, so the main overlay is always photo 1's.
+  const fail = (i, ask) => ({ ...finishErr(read, pipeline, ask, null, overlays[0]), overlays, photo: i + 1 });
   for (let i = 0; i < n; i++) {
     const [tSeg, rSeg] = segs[i];
     const frame = tSeg.frame || rSeg.frame;
@@ -695,13 +696,13 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, wordTimeou
     pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { combined: false, photo: c.refused != null ? c.refused + 1 : null, gapMm: c.gapMm ?? null, why: c.reason || 'does not touch the floor in the other photos' } });
     const k = photos.indexOf(photos.reduce((a, b) => (b.areaMm2 > a.areaMm2 ? b : a)));
     const m = photos[k].measured;
-    const r = tileAnswer({ ...base, overlay: overlays[k], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: m.plusMinusPct, confidence: m.confidence, notes: m.notes });
+    const r = tileAnswer({ ...base, overlay: overlays[0], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: m.plusMinusPct, confidence: m.confidence, notes: m.notes });
     r.note = `The photos weren’t combined: photo ${c.refused != null ? c.refused + 1 : '?'} doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved. This answer is from photo ${k + 1} alone. ${MULTI_PAPER_TIP}`;
     r.combined = { photos: n, ok: false, from: k + 1 };
     return r;
   }
   const coverage = c.photos.map((p, i) => `photo ${i + 1} ${Math.round(p.coverage * 100)}%`).join(', ');
-  pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { sqft: c.sqft, widthFt: Math.round((c.widthMm / 304.8) * 10) / 10, lengthFt: Math.round((c.lengthMm / 304.8) * 10) / 10, coverage, turned: c.photos.filter((p) => p.flipped).length, plusMinusPct: c.plusMinusPct } });
+  pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { sqftSeen: c.sqft, widthFt: Math.round((c.widthMm / 304.8) * 10) / 10, lengthFt: Math.round((c.lengthMm / 304.8) * 10) / 10, coverage, turned: c.photos.filter((p) => p.flipped).length, plusMinusPct: c.plusMinusPct } });
   const notes = [...new Set(photos.flatMap((p) => p.notes))];
   const r = tileAnswer({ ...base, overlay: overlays[0], roomW: c.widthMm / 25.4, roomL: c.lengthMm / 25.4, plusMinusPct: c.plusMinusPct, confidence: photos.every((p) => p.confidence === 'good') ? 'good' : 'low', notes, photos: n });
   r.combined = { photos: n, ok: true, sqft: c.sqft, coverage: c.photos.map((p) => p.coverage), turned: c.photos.map((p) => p.flipped) };

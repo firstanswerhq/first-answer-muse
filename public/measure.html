@@ -39,9 +39,13 @@
     <div class="m-thread" id="thread" aria-live="polite"></div>
 
     <div class="m-staged hidden" id="staged">
-      <img id="stagedImg" alt="Photo ready to send">
-      <span>Photo ready. Add a question and tap Send.</span>
-      <button type="button" id="unstage" aria-label="Remove photo">&times;</button>
+      <div class="m-thumbs" id="stagedThumbs" aria-label="Photos ready to send"></div>
+      <div class="m-staged-text">
+        <span id="stagedMsg">Photo ready. Add a question and tap Send.</span>
+        <button type="button" class="m-add hidden" id="addPhoto">Add another photo of the same floor</button>
+        <small class="m-add-tip hidden" id="addTip">Leave the sheet of paper where it is and shoot the floor from another doorway or corner.</small>
+      </div>
+      <button type="button" id="unstage" aria-label="Remove photos">&times;</button>
     </div>
 
     <form class="m-compose" id="compose">

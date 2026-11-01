@@ -68,7 +68,7 @@ test('three partial photos of a 10 × 12 ft room combine to the whole room (area
   }
   const combine = r.pipeline.find((s) => /^combine 3 photos/.test(s.step));
   assert.ok(combine, steps.join(' | '));
-  assert.match(stepDetail(combine), /sqft: \d+ · width ft: [\d.]+ · length ft: [\d.]+ · coverage: photo 1 \d+%, photo 2 \d+%, photo 3 \d+%/);
+  assert.match(stepDetail(combine), /floor seen \(sq ft\): \d+ · width ft: [\d.]+ · length ft: [\d.]+ · coverage: photo 1 \d+%, photo 2 \d+%, photo 3 \d+%/);
   // Our own template passes the wording check (so faithful Spark wording would be used), "3 photos" included.
   const facts = wordingFacts(r);
   assert.deepEqual(checkWording(r.answer, facts, r.headline, { task: r.task }), { ok: true });
