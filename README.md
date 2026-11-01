@@ -53,7 +53,12 @@ The page labels this honestly: **"Spark wording · numbers from geometry, checke
 
 ### Whole floor from several photos
 
-One photo from a doorway sees only part of a floor. So the customer lays **one** sheet of printer paper on the floor, square to a wall, leaves it there, and takes 2 to 4 photos from different doorways or corners, with the paper in every shot (the page says so: "Leave the sheet of paper where it is and shoot the floor from another doorway or corner").
+One photo from a doorway sees only part of a floor. So the customer lays **one** sheet of printer paper on the floor, square to a wall, leaves it there, and takes 2 to 4 photos from different doorways or corners, with the paper in every shot. It works the way texting works:
+
+1. The customer sends one floor photo. If the whole floor is in it, they get the tile answer as always. If the floor runs off the photo's edge, they get what it shows and a request: **"I can see part of the floor: about 61 sq ft so far. Send one or two more photos from another doorway or corner, and leave the sheet of paper where it is, so I can measure the whole room."** No tiles to buy and no job for the business yet.
+2. Each later photo in the same conversation is combined with the earlier ones (the page keeps this conversation's floor photos and sends them all each time; the server stays stateless): **"Combined from 2 photos: the floor is about 10 ft 2 in by 12 ft 1 in (123 sq ft). In 12 × 12 in tile that's 132 tiles laid, plus 15% extra for cuts and mistakes: buy 152 tiles. Send one more if a corner is still missing, or tap Send to the business."** Up to 4 photos; at 4: "That's the limit of 4 photos; tap Send to the business."
+3. A photo that can't be used is dropped, the good ones still answer, and the tip names it: **"Photo 2: I can't line that one up without the paper. Send it again with the whole sheet in the shot (and leave the sheet where it is)."** A sheet too small or too far to read: **"Photo 2: Get closer to the sheet for that one and send it again."** No floor found: "Photo 2: I couldn't find the floor in that one. Send it again with more of the floor and the whole sheet in the shot."
+4. The set of floor photos resets when the customer moves to another task, taps **Start over** under the answer, or sends the job to the business. "Add another photo of the same floor" on the staged bar still attaches several at once as a shortcut.
 
 - **Per photo**, the same pipeline as one photo: SAM 3.1 outlines the floor and the paper, and Muse Spark checks both outlines (one check per photo; the panel says "photo 2 of 3: ...").
 - **The paper anchors every photo.** Each photo's paper gives a perspective map from that photo's pixels to millimeters on the paper's plane, with the paper's corner as the origin and its long edge as the x axis (`src/flat.js`, the same map the one-photo case uses). Every photo's floor lands in that one frame, so the floors can be laid over each other without knowing where the phone was.
@@ -123,16 +128,17 @@ The numbers above come from synthetic scenes with known answers. Real-photo accu
 
 ### Try the whole-floor measure in 60 seconds
 
-1. Open `/measure.html` and tap **Tile floor**. With the sample images in place, the two bathroom photos (same room, doorway and far corner, one sheet of paper on the floor) are staged with the question filled in and the bar says "2 photos of the floor ready"; without them, the question is filled in and you attach your own two photos with the camera button and **Add another photo of the same floor**.
-2. Tap **Send**. The waiting list shows SAM outlining the floor and the paper in each photo ("1 of 2 done", "2 of 2 done"), our geometry mapping each floor onto the paper's plane and combining them, then Muse Spark checking every photo's outlines.
-3. The reply shows photo 1 full size and photo 2 under it, each with SAM's masks, then "The floor is about W by L (N sq ft), combined from 2 photos on the paper's plane" with the tiles to buy, and the panel's combine step with the floor seen, how much of a rectangle it fills and each photo's coverage.
-4. With your own floor: lay one sheet of printer paper on it square to a wall, tap the camera for the first photo, then **Add another photo of the same floor** for each further doorway or corner (up to 4), leaving the paper where it is. Each thumbnail has a × to drop it.
+1. Open `/measure.html` and tap **Tile floor**. With the sample images in place, the first bathroom photo (from the doorway, one sheet of paper on the floor) is sent with the question; without them, the question is filled in and you attach your own photo with the camera button.
+2. The reply shows the photo with SAM's masks, "About N sq ft so far" and the request for another photo from another doorway, with a **Send the next sample photo** button under it (and **Start over**).
+3. Tap it. The second photo (the same bathroom from the far corner) goes with the first; the waiting list shows SAM outlining the floor and the paper in each photo ("1 of 2 done", "2 of 2 done"), our geometry mapping each floor onto the paper's plane and combining them, then Muse Spark checking every photo's outlines.
+4. The reply shows photo 1 full size and photo 2 under it, each with SAM's masks, then "Combined from 2 photos: the floor is about W by L (N sq ft) ... buy N tiles. Send one more if a corner is still missing, or tap Send to the business", the business block, and the panel's combine step with the floor seen, how much of a rectangle it fills and each photo's coverage.
+5. With your own floor: lay one sheet of printer paper on it square to a wall, send a photo from one doorway, then tap the camera for the next one when asked (up to 4), leaving the paper where it is. Each joins the earlier ones.
 
 ## Run it
 
 ```bash
 npm install
-npm test                         # 188 tests, no key needed, no Meta credits spent (fixtures and stand-ins)
+npm test                         # 189 tests, no key needed, no Meta credits spent (fixtures and stand-ins)
 npm start                        # http://localhost:3000/measure.html
 MODEL_API_KEY=... npm start      # live on the Meta Model API
 ```
@@ -206,6 +212,7 @@ Every commit in this repository is from the hackathon window; the first is Oct 2
 | Nov 1 | Whole floor from several photos: 2 to 4 photos of one floor with the same sheet of paper combined on the paper's plane (`src/floor.js`), per-photo steps and checks, retake and different-floor refusals, `dataUrls` on `/api/measure` with per-photo limits, the page's "Add another photo of the same floor", Spanish, tests | `8f438dc`, `9c4d81e`, `b5143b3`, `4b3f65e`, `2c833ab`, `4a3c7cc`, `3d41482` |
 | Nov 1 | Review fixes: the paper's long edge chosen with the camera (focal length), not pixel length; per-photo sanity bounds; rectangle-fill check; refused answers withhold every panel number; page never wipes staged photos, per-thumbnail ×, pins stay inside the photo; JSON 413; sample chips with several photos; README honesty on the rectangle limit and the half-turn claim | `23b9afe`, `a0246ec`, `7486132`, `246408f`, `f5570ce`, `6312a1b` (and this hash-only commit) |
 | Nov 1 | Verification fixes: a sheet too small to read is a retake (fit, score margin, 55 px), the fallback photo is the finest map, each photo's range is propagated from its sheet's corners, panel says 'a photo needs a retake'; page grid span, kept-first line, 24 px ×; README accuracy from the wrong-edge sweep, build-table dates | `9ff7ce2`, `d832155`, `0cf00ed` (and one hash-only commit) |
+| Nov 1 | The floor as a conversation: one photo gives "so far" and asks for more, each later photo is combined, bad photos are dropped and asked for again, "Send the next sample photo" and "Start over" on the page | `c73c559`, `c2b7805`, and this README commit |
 
 See `git log` for the full history.
 
