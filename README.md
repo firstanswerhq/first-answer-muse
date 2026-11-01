@@ -191,7 +191,7 @@ Every commit in this repository is from the hackathon window; the first is Oct 2
 | Oct 28 | Privacy: README and page name the Supabase relay route and what is kept in memory | `44b43c8` |
 | Oct 28 | Tile answer passes our own unit check; every chip's template is tested | `5a171ee` |
 | Oct 28 | Hundredths under an inch; owner gets the job in English for Spanish questions; Spanish outline labels | `0eaf815` |
-| Nov 1 | Whole floor from several photos: 2 to 4 photos of one floor with the same sheet of paper combined on the paper's plane (`src/floor.js`), per-photo steps and checks, retake and different-floor refusals, `dataUrls` on `/api/measure` with per-photo limits, the page's "Add another photo of the same floor", Spanish, tests | `8f438dc`, `9c4d81e`, `b5143b3`, `4b3f65e`, `2c833ab`, README commit below |
+| Nov 1 | Whole floor from several photos: 2 to 4 photos of one floor with the same sheet of paper combined on the paper's plane (`src/floor.js`), per-photo steps and checks, retake and different-floor refusals, `dataUrls` on `/api/measure` with per-photo limits, the page's "Add another photo of the same floor", Spanish, tests | `8f438dc`, `9c4d81e`, `b5143b3`, `4b3f65e`, `2c833ab`, `4a3c7cc` |
 
 See `git log` for the full history.
 
