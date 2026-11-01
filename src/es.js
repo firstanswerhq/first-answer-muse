@@ -151,7 +151,7 @@ const RULES = [
     `${m[1] ? `Combinando ${m[1]} fotos: el piso` : 'El piso'} mide unos ${units(m[2])} por ${units(m[3])} (${m[4]} pies cuadrados). Con baldosas de ${m[5]} × ${m[6]} pulg. son ${m[7]} baldosas colocadas, más ${m[8]}% extra para cortes y errores: compra ${m[9]} baldosas.${m[10] ? ` ${es(m[10])}` : ''}`],
   [/^About (\d+) sq ft so far$/, (m) => `Unos ${m[1]} pies cuadrados por ahora`],
   [/^I can see part of the floor: about (\d+) sq ft so far\. (.+)$/, (m) => `Veo parte del piso: unos ${m[1]} pies cuadrados por ahora. ${es(m[2])}`],
-  [/^Photo (\d+): (.+)$/, (m) => `Foto ${m[1]}: ${es(m[2])}`],
+  [/^Photo (\d+): (.+)$/, (m, s) => (es(m[2]) === m[2] ? s : `Foto ${m[1]}: ${es(m[2])}`)],
   [/^(\d+) photos$/, (m) => `${m[1]} fotos`],
   [/^Combined from (\d+) photos — check one wall with a tape before cutting\.$/, (m) => `Combinado de ${m[1]} fotos: revisa una pared con cinta antes de cortar.`],
   [/^The photos weren’t combined: photo (\d+) doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved\. This answer is from photo (\d+) alone\. (.+)$/, (m) =>
@@ -191,7 +191,7 @@ export function es(str) {
   if (str == null) return str;
   const s = String(str);
   if (EXACT[s]) return EXACT[s];
-  for (const [re, fn] of RULES) { const m = s.match(re); if (m) return fn(m); }
+  for (const [re, fn] of RULES) { const m = s.match(re); if (m) return fn(m, s); }
   // A tip made of several strings we know, joined with spaces ("Photo 2: ... Send it again ... Combined
   // from 2 photos — ..."): the longest run of sentences with a rule, then the next, until all are done.
   const parts = s.match(/[^.!?]+(?:\.|\)|!|\?)+(?=\s|$)/g);
@@ -246,7 +246,8 @@ export function localizeResult(r) {
   if (out.headline) out.headline = es(out.headline);
   if (out.answer && out.wording !== 'spark') out.answer = es(out.answer);
   if (out.answerTemplate) out.answerTemplate = es(out.answerTemplate);
-  if (out.ask) out.ask = es(out.ask);
+  if (out.asks) { out.asks = out.asks.map(es); if (out.askTail) out.askTail = es(out.askTail); out.ask = [...out.asks, out.askTail].filter(Boolean).join(' '); }
+  else if (out.ask) out.ask = es(out.ask);
   if (out.note) out.note = es(out.note);
   if (out.measuredAgainst) out.measuredAgainst = esRuler(out.measuredAgainst);
   out.numbers = (out.numbers || []).map((n) => ({ label: es(n.label), value: es(n.value) }));

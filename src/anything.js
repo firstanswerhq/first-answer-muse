@@ -660,6 +660,8 @@ function partialFloorAnswer({ m, photos = 1, ...base }) {
   // The part seen is measured like any close-up; that it runs off the edge is the point here, not a flaw (measureFlat adds 8% for it).
   const pm = Math.max(0.03, Math.round((m.plusMinusPct - 0.08) * 1000) / 1000);
   const pmPct = Math.round(pm * 100);
+  const step = base.pipeline.findLast((x) => /measure against/.test(x.step) && x.result);
+  if (step) step.result = { ...step.result, plusMinusPct: pm, partial: true };
   const notes = m.notes.filter((n) => !/runs off the edge/.test(n));
   return finish({
     ...base,
@@ -731,15 +733,19 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
     if (!found[i].ruler) { dropWhy(i, NO_SHEET); continue; }
     const f = floorOnPaper({ target: found[i].target, ref: found[i].ruler, refKind, focal35 });
     pipeline.add({ model: 'first-answer math', step: `${label(i)}: map the floor onto the ${R.label}’s plane`, result: f.ok ? { sqftSeen: Math.round(f.areaMm2 * SQFT_PER_MM2), plusMinusPct: f.plusMinusPct, confidence: f.confidence } : { ok: false, reason: f.reason } });
-    if (!f.ok) { dropWhy(i, /too small|impossibly big/.test(f.reason) ? GET_CLOSER : `${f.reason}. Send that one again.`); continue; }
+    if (!f.ok) { dropWhy(i, /nothing to measure|does not reach/.test(f.reason) ? NO_FLOOR : GET_CLOSER); continue; }
     if (f.errorMm != null) pipeline.at(-1).result.farWallErrorIn = Math.round(f.errorMm / 25.4);
     photos.push({ ...f, index: i });
   }
   if (!photos.length) return { ...fail(dropped[0] - 1, asks.join(' ')), dropped };
+  // The drop notices stay a list (asks: one per dropped photo; askTail: the answer's own tip) so each
+  // piece is translated on its own; ask is the joined form for anything that reads only ask.
   const withDrops = (r) => {
     if (!dropped.length) return r;
     r.dropped = dropped;
-    r.ask = [asks.join(' '), r.ask].filter(Boolean).join(' ');
+    r.asks = asks;
+    r.askTail = r.ask || null;
+    r.ask = [...asks, r.ask].filter(Boolean).join(' ');
     return r;
   };
   // One good photo left: the same answer one photo gets (partial or whole).
@@ -766,6 +772,8 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
     const r = tileAnswer({ ...base, overlay: overlays[0], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: Math.max(m.plusMinusPct, photos[k].plusMinusPct), confidence: m.confidence, notes: photos[k].notes });
     r.note = `The photos weren’t combined: ${why}. This answer is from photo ${photos[k].index + 1} alone. ${MULTI_PAPER_TIP}`;
     r.combined = { photos: k2, ok: false, from: photos[k].index + 1, fill: c.fill ?? null };
+    r.photos = k2;
+    r.wantMore = k2 < MAX_PHOTOS;
     return withDrops(r);
   }
   const coverage = c.photos.map((p, i) => `photo ${photos[i].index + 1} ${Math.round(p.coverage * 100)}%`).join(', ');
