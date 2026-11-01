@@ -55,10 +55,12 @@ export class MetaBudgetError extends Error {
   constructor() { super('Meta daily limit reached'); this.name = 'MetaBudgetError'; }
 }
 export const DAILY_CAP_MESSAGE = 'The demo has used today’s share of Meta model calls. Please try again tomorrow.';
-// Middleware: refuse up front when today's Meta budget can't cover this request (need = calls it may make).
+// Middleware: refuse up front when today's Meta budget can't cover this request (need = calls it may
+// make, a number or a function of the request: a Sight request with several photos needs more).
 export function metaBudgetGate(need = 1, isLive = () => true) {
   return (req, res, next) => {
-    if (!isLive() || metaCalls.remaining() >= need) return next();
+    const n = typeof need === 'function' ? need(req) : need;
+    if (!isLive() || metaCalls.remaining() >= n) return next();
     res.status(429).json({ ok: false, error: DAILY_CAP_MESSAGE, ask: DAILY_CAP_MESSAGE, retry: false, rateLimited: true, dailyCap: true });
   };
 }

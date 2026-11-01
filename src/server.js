@@ -17,12 +17,13 @@ import { measureAnything, stepDetail, friendlyError, faceEnabled } from './anyth
 import { readExif } from './distance.js';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { rateLimiter, tokenOk, redactSnapshot, metaBudgetGate, DAILY_CAP_MESSAGE } from './guard.js';
+import { rateLimiter, tokenOk, redactSnapshot, metaBudgetGate, clientIp, DAILY_CAP_MESSAGE } from './guard.js';
+import { MAX_PHOTOS } from './floor.js';
 import { hasKey, transcribeWav, openRealtimeTranscription, SPARK, BASE_URL, DIRECT_URL, RELAY_URL, relayHeaders } from './muse.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const app = express();
-app.use(express.json({ limit: '12mb' }));
+app.use(express.json({ limit: '16mb' })); // up to 4 photos of a floor at 1600 px, base64
 app.use(express.static(path.join(__dirname, '..', 'public')));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 32 * 1024 * 1024 } });
 
@@ -256,11 +257,37 @@ app.post('/api/measure/send', deskLimit, safe(async (req, res) => {
   });
 }));
 
-// Up to 12 Meta calls: read, 3 SAM outlines, check and wording, then one correction round (SAM again,
-// possibly twice, check and wording again). Every HTTP attempt is counted as it happens.
-app.post('/api/measure', measureLimit, metaBudgetGate(12, live), async (req, res) => {
-  const { dataUrl, text = '', exifB64 = '' } = req.body || {};
-  if (!/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl || '')) return res.status(400).json({ ok: false, ask: 'Send a PNG, JPEG or WebP photo.' });
+// The photos in a /api/measure request: `dataUrl` (one photo, as always) or `dataUrls` (1 to 4 photos of
+// one floor with the same sheet of paper in every shot). The first of dataUrls is the photo for everything else.
+const IMAGE_URL = /^data:image\/(png|jpe?g|webp);base64,/;
+export function photosOf(body) {
+  const list = Array.isArray(body?.dataUrls) ? body.dataUrls : [];
+  const urls = list.length ? list : body?.dataUrl ? [body.dataUrl] : [];
+  return urls.map((u) => (typeof u === 'string' ? u : ''));
+}
+// Every photo counts against the per-IP limit (the first was counted by measureLimit already).
+const extraPhotosLimit = (req, res, next) => {
+  const n = photosOf(req.body).length;
+  if (n > MAX_PHOTOS) return res.status(400).json({ ok: false, ask: `Send up to ${MAX_PHOTOS} photos of the floor.` });
+  for (let i = 1; i < n; i++) {
+    const r = measureLimit.check(clientIp(req));
+    if (!r.ok) { res.set('Retry-After', String(r.retryAfterS)); return res.status(429).json({ ok: false, error: 'That’s a lot of photos in a few minutes. Give it about 10 minutes and try again.', ask: 'That’s a lot of photos in a few minutes. Give it about 10 minutes and try again.', retry: false, rateLimited: true }); }
+  }
+  next();
+};
+
+// Stand-in models for the server tests (test/floor.test.js): a deps object as measureAnything takes it.
+// null in production, where the real Meta models are used.
+export const measureDeps = { current: null };
+
+// Up to 12 Meta calls per photo: read, 3 SAM outlines, check and wording, then one correction round (SAM
+// again, possibly twice, check and wording again). Every HTTP attempt is counted as it happens.
+export const CALLS_PER_PHOTO = 12;
+app.post('/api/measure', measureLimit, extraPhotosLimit, metaBudgetGate((req) => CALLS_PER_PHOTO * Math.max(1, photosOf(req.body).length), live), async (req, res) => {
+  const { text = '', exifB64 = '' } = req.body || {};
+  const dataUrls = photosOf(req.body);
+  const dataUrl = dataUrls[0];
+  if (!dataUrls.length || !dataUrls.every((u) => IMAGE_URL.test(u))) return res.status(400).json({ ok: false, ask: dataUrls.length > 1 ? 'Every photo must be a PNG, JPEG or WebP.' : 'Send a PNG, JPEG or WebP photo.' });
   let focal35 = null;
   try { if (exifB64) focal35 = readExif(Buffer.from(exifB64, 'base64')).focal35 || null; } catch {}
   // Streaming (Accept: application/x-ndjson): one line per finished step, then the result, so the page's
@@ -273,7 +300,7 @@ app.post('/api/measure', measureLimit, metaBudgetGate(12, live), async (req, res
     line({ type: 'start' });
   }
   try {
-    const r = await measureAnything({ dataUrl, text: String(text).slice(0, 500), focal35, onStep: stream ? (s) => line({ type: 'step', ...progressStep(s) }) : null });
+    const r = await measureAnything({ dataUrl, dataUrls: dataUrls.length > 1 ? dataUrls : null, text: String(text).slice(0, 500), focal35, deps: measureDeps.current, onStep: stream ? (s) => line({ type: 'step', ...progressStep(s) }) : null });
     broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
     const handoff = rememberHandoff(r);
     const { thumb, ...rest } = r; // the owner board's copy of the photo stays on the server
