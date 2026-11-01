@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { measureAnything, checkWording, wordingFacts, stepDetail } from '../src/anything.js';
+import { measureAnything, checkWording, wordingFacts, stepDetail, checkBudgetMs, CHECK_TIMEOUT_MS, CHECK_EXTRA_MS, CHECK_BUDGET_MAX_MS } from '../src/anything.js';
 import { floorOnPaper, combineFloors, invertH } from '../src/floor.js';
 import { measureFlat } from '../src/flat.js';
 import { camera, samSeg, rectShape } from './flatscene.js';
@@ -69,7 +69,7 @@ test('three partial photos of a 10 × 12 ft room combine to the whole room (area
   }
   const combine = r.pipeline.find((s) => /^combine 3 photos/.test(s.step));
   assert.ok(combine, steps.join(' | '));
-  assert.match(stepDetail(combine), /floor seen \(sq ft\): \d+ · width ft: [\d.]+ · length ft: [\d.]+ · fills a rectangle: \d+% · coverage: photo 1 \d+%, photo 2 \d+%, photo 3 \d+%/);
+  assert.match(stepDetail(combine), /floor seen \(sq ft\): \d+ · width ft: [\d.]+ · length ft: [\d.]+ · fills a rectangle: \d+%; photos overlap \d+% · coverage: photo 1 \d+%, photo 2 \d+%, photo 3 \d+%/);
   // Our own template passes the wording check (so faithful Spark wording would be used), "3 photos" included.
   const facts = wordingFacts(r);
   assert.deepEqual(checkWording(r.answer, facts, r.headline, { task: r.task }), { ok: true });
@@ -166,6 +166,68 @@ test('Review C’s 11 × 9 ft room with the sheet 200 mm from a corner: the trut
   }
 });
 
+// The first real run: a bathroom whose vanity and tub take bites out of the floor. Two doorway photos
+// of a 3 × 2.2 m room with a 1.2 × 0.9 m vanity block in one corner: the union fills about 80% of the
+// rectangle, so the floor to tile is the union's area, with the room's sides given for the layout.
+test('a floor that is not a plain rectangle (a vanity takes a bite) combines, with the open floor as the tile area', async () => {
+  const roomBox = rectShape(0, 0, 3000, 2200, 0), vanity = rectShape(-900, 650, 1200, 900, 0);
+  const floor = { inside: (p) => roomBox.inside(p) && !vanity.inside(p), boundary: [...roomBox.boundary, ...vanity.boundary] };
+  const paper = rectShape(400, -300, 279.4, 215.9, 0);
+  const poses = [{ tiltDeg: 40, D: 2600, f: 1300, panDeg: 0, aim: [0, -200] }, { tiltDeg: 40, D: 2600, f: 1300, panDeg: 180, aim: [0, 200] }];
+  const { urls, deps } = scene(poses, { floor: [floor, floor], paper: [paper, paper] });
+  const r = await measureAnything({ dataUrls: urls, text: 'tile this bathroom floor', deps });
+  assert.equal(r.ok, true, r.ask);
+  assert.equal(r.combined.ok, true, r.note);
+  assert.equal(r.combined.rectangle, false);
+  assert.ok(r.combined.fill >= 0.55 && r.combined.fill < 0.9, `fill ${r.combined.fill}`);
+  assert.equal(r.openFloor, true);
+  const openSqft = (3000 * 2200 - 1200 * 900) / 92903.04; // 59.4 sq ft of floor around the vanity
+  const sqft = parseFloat(r.numbers.find((n) => n.label === 'Floor to tile').value);
+  near(sqft, openSqft, 0.1, 'open floor');
+  assert.ok(sqft < 3000 * 2200 / 92903.04 * 0.95, 'less than the rectangle');
+  assert.match(r.answer, /^Combined from 2 photos: the room is about 7 ft(?: \d+ in)? by 9 ft(?: \d+ in)?; the floor to tile is [\d.]+ sq ft \(the floor isn’t a plain rectangle: a vanity, tub or toilet takes up part of it\)\. In 12 × 12 in tile/);
+  assert.ok(r.steps.some((x) => /cut list is for the open floor/.test(x)));
+  assert.ok(!r.numbers.some((n) => n.label === 'Full tiles'));
+  assert.equal(r.job.sqft, sqft);
+  assert.match(r.business.job, /not a plain rectangle/);
+  const facts = wordingFacts(r);
+  assert.deepEqual(checkWording(r.answer, facts, r.headline, { task: r.task }), { ok: true });
+  // In Spanish too.
+  const es = await measureAnything({ dataUrls: urls, text: 'baldosas para este baño', deps: { ...deps, read: async () => R({ language: 'es' }) } });
+  assert.match(es.answer, /^Combinando 2 fotos: el cuarto mide unos .*; el piso a enlosar es de [\d.]+ pies cuadrados \(el piso no es un rectángulo simple/);
+  assert.equal(es.numbers.find((n) => n.label === 'Piso a enlosar') != null, true);
+});
+
+test('Spark’s checks on several photos share one budget and run two at a time; a slow Spark is skipped, not timed out one by one', async () => {
+  const { urls, deps } = scene();
+  let running = 0, peak = 0;
+  const slow = (ms) => async () => { running++; peak = Math.max(peak, running); await new Promise((r) => setTimeout(r, ms)); running--; return { outlines: [{ color: 'MAGENTA', ok: true, seen: 'floor' }, { color: 'ORANGE', ok: true, seen: 'paper' }], problem: '', retake_tip: '' }; };
+  const t0 = Date.now();
+  const r = await measureAnything({ dataUrls: urls, text: 'tile', deps: { ...deps, check: slow(150) }, checkTimeoutMs: 1500 });
+  assert.equal(r.ok, true, r.ask);
+  assert.equal(r.checked, 'agreed');
+  assert.ok(peak <= 2, `at most two checks at once, saw ${peak}`);
+  assert.ok(Date.now() - t0 < 6000);
+  // Spark never answers: every check is skipped within the shared budget, and the answer still goes out, marked unchecked.
+  const never = await measureAnything({ dataUrls: urls, text: 'tile', deps: { ...deps, check: () => new Promise(() => {}) }, checkTimeoutMs: 400 });
+  assert.equal(never.ok, true);
+  assert.equal(never.checked, 'skipped');
+  assert.ok(never.pipeline.filter((s) => /check SAM/.test(s.step)).every((s) => /check skipped \(no reply in [\d.]+ s\)/.test(stepDetail(s))));
+  assert.equal(checkBudgetMs(1), CHECK_TIMEOUT_MS);
+  assert.equal(checkBudgetMs(3), CHECK_TIMEOUT_MS + 2 * CHECK_EXTRA_MS);
+  assert.equal(checkBudgetMs(9), CHECK_BUDGET_MAX_MS);
+});
+
+test('Spark returns no text for the wording: the panel says so', async () => {
+  const { urls, deps } = scene();
+  const r = await measureAnything({ dataUrls: urls, text: 'tile', deps: { ...deps, word: async () => '' } });
+  assert.equal(r.ok, true);
+  assert.equal(r.wording, 'template');
+  assert.equal(stepDetail(r.pipeline.find((s) => /word the answer/.test(s.step))), 'kept our template (Spark returned no text)');
+  const budget = await measureAnything({ dataUrls: urls, text: 'tile', deps: { ...deps, word: async () => { throw new Error('Spark returned no text: it used its whole token budget thinking'); } } });
+  assert.equal(stepDetail(budget.pipeline.find((s) => /word the answer/.test(s.step))), 'kept our template (Spark returned no text (its whole token budget went to thinking))');
+});
+
 test('Review B’s fourth pose (pan 70, sees the paper’s long edge foreshortened) joins the three and the room stays 10 × 12', async () => {
   const poses = [...POSES, { tiltDeg: 35, D: 3500, f: 1300, panDeg: 70, aim: [-600, -300] }];
   const { urls, deps } = scene(poses);
@@ -193,33 +255,46 @@ test('a photo with the paper too small or too far is a retake of that photo, nev
   assert.ok(parseFloat(r.numbers[0].value) < 112);
 });
 
-test('a union that does not fill a rectangle (a cross of misaligned floors, or an L) is not called a room', () => {
+test('fill bands and alignment: a cross of misaligned floors is refused; an L-shaped floor combines with the union as the area; a plain rectangle fills its rectangle', () => {
   const L = 279.4, S = 215.9;
   const rect = (x0, x1, y0, y1) => ({ ok: true, paper: { long: L, short: S }, plusMinusPct: 0.03, confidence: 'good', notes: [], areaMm2: (x1 - x0) * (y1 - y0), bounds: { x0, x1, y0, y1 }, sample: (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1 });
+  // Two floors that share only the sheet's corner of the room (27% of the smaller): they did not line up.
   const across = rect(-1500, 1500, -400, 400), along = rect(-400, 400, -1500, 1500);
   const c = combineFloors([across, along]);
   assert.equal(c.ok, false);
   assert.equal(c.refused, null);
-  assert.ok(c.fill < 0.6, `fill ${c.fill}`);
-  const ok = combineFloors([rect(-200, 1500, -800, 1200), rect(1300, 3000, -800, 1200)]);
+  assert.deepEqual(c.misaligned, [0, 1]);
+  assert.ok(c.pairOverlap < 0.4, `overlap ${c.pairOverlap}`);
+  // An L: a 3.2 × 2 m room with a 1.5 × 1 m bite in one corner, seen from two doorways that both see the sheet.
+  const a = rect(-200, 1500, -800, 1200), b = rect(-200, 3000, -800, 200);
+  const l = combineFloors([a, b]);
+  assert.equal(l.ok, true, JSON.stringify(l));
+  assert.equal(l.rectangle, false);
+  near(l.fill, (3.4 + 3.2 - 1.7) / 6.4, 0.03, 'fill');
+  near(l.areaMm2, 4.9e6, 0.03, 'union area');
+  near(l.widthMm, 2000, 0.02, 'width'); near(l.lengthMm, 3200, 0.02, 'length');
+  assert.ok(l.pairOverlap >= 0.4, `overlap ${l.pairOverlap}`);
+  // A plain rectangle from two overlapping halves.
+  const ok = combineFloors([rect(-200, 2000, -800, 1200), rect(-200, 3000, -800, 1200)]);
   assert.equal(ok.ok, true);
+  assert.equal(ok.rectangle, true);
   assert.ok(ok.fill >= 0.98, `fill ${ok.fill}`);
 });
 
 test('the 180° ambiguity: a photo whose paper frame comes out turned around is put back by overlap', () => {
-  // Two halves of a 3000 × 2000 mm floor on the paper's plane (paper at the origin, long edge along x).
-  // Photo B's frame is handed over turned 180° about the paper, as a second camera from the far doorway
-  // would give it; combineFloors must turn it back, or the union would be twice the room.
+  // Two halves of a 3200 × 2000 mm floor on the paper's plane (paper at the origin, long edge along x),
+  // both seeing the sheet. Photo B's frame is handed over turned 180° about the paper, as a second camera
+  // from the far doorway would give it; combineFloors must turn it back, or the union would be a cross.
   const L = 279.4, S = 215.9;
   const rect = (x0, x1, y0, y1) => ({ ok: true, paper: { long: L, short: S }, plusMinusPct: 0.03, confidence: 'good', notes: [], areaMm2: (x1 - x0) * (y1 - y0), bounds: { x0, x1, y0, y1 }, sample: (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1 });
   const turn = (p) => ({ ...p, bounds: { x0: L - p.bounds.x1, x1: L - p.bounds.x0, y0: S - p.bounds.y1, y1: S - p.bounds.y0 }, sample: (x, y) => p.sample(L - x, S - y) });
-  // The paper sits near the left end of the room, so only one of the two turns of the right half fits.
-  const left = rect(-200, 1500, -800, 1200), right = rect(1300, 3000, -800, 1200);
+  const left = rect(-200, 2000, -800, 1200), right = rect(-200, 3000, -800, 1200);
   const straight = combineFloors([left, right]);
   const turned = combineFloors([left, turn(right)]);
   assert.equal(straight.photos[1].flipped, false);
   assert.equal(turned.photos[1].flipped, true);
   for (const c of [straight, turned]) {
+    assert.equal(c.ok, true, JSON.stringify(c));
     near(c.areaMm2, 3200 * 2000, 0.02, 'area');
     near(c.lengthMm, 3200, 0.02, 'length'); near(c.widthMm, 2000, 0.02, 'width');
   }
@@ -284,7 +359,10 @@ test('a photo of a different floor (or a moved paper) is refused: the best singl
   assert.doesNotMatch(r.answer, /combined from/);
   assert.ok(!r.numbers.some((n) => n.label === 'Photos'));
   assert.ok([1, 3].includes(r.combined.from), `from photo ${r.combined.from}`);
-  assert.ok(r.numbers.some((n) => n.label === 'Floor') && /^Buy \d+ tiles$/.test(r.headline));
+  // The chosen photo shows only part of the floor, so the fallback is the partial, never the room.
+  assert.equal(r.partial, true);
+  assert.match(r.headline, /^About \d+ sq ft so far$/);
+  assert.match(r.numbers.find((n) => n.label === 'Range').value, /\(±6%\)$/);
   const combine = r.pipeline.find((s) => /^combine 3 photos/.test(s.step));
   assert.match(stepDetail(combine), /^not combined: photo 2 does not touch the floor in the other photos \([\d.]+ ft away\); best single photo used$/);
   assert.equal(r.overlays.length, 3);

@@ -47,7 +47,8 @@ const EXACT = {
   Area: 'Área', Range: 'Rango', Size: 'Tamaño', 'Concrete sealer': 'Sellador para concreto', 'Asphalt sealer': 'Sellador para asfalto',
   'Chip size': 'Tamaño del impacto', 'Crack length': 'Largo de la grieta', 'Repair limit': 'Límite para reparar',
   'Foot length': 'Largo del pie', 'US men’s': 'EE. UU. hombre', 'US women’s': 'EE. UU. mujer', EU: 'EU',
-  Narrowest: 'Lo más angosto', Typical: 'Normal', Needs: 'Necesita', Floor: 'Piso', 'Full tiles': 'Baldosas enteras', Buy: 'Comprar', Photos: 'Fotos', 'Seen so far': 'Visto por ahora',
+  Narrowest: 'Lo más angosto', Typical: 'Normal', Needs: 'Necesita', Floor: 'Piso', 'Full tiles': 'Baldosas enteras', Buy: 'Comprar', Photos: 'Fotos', 'Seen so far': 'Visto por ahora', Room: 'Cuarto', 'Floor to tile': 'Piso a enlosar',
+  'The cut list is for the open floor; fixtures take their own cuts.': 'La lista de cortes es para el piso libre; los muebles fijos llevan sus propios cortes.',
   // the conversation around a floor
   'Send one or two more photos from another doorway or corner, and leave the sheet of paper where it is, so I can measure the whole room.': 'Manda una o dos fotos más desde otra puerta u otra esquina, y deja la hoja de papel donde está, para que pueda medir todo el cuarto.',
   'Send one more if a corner is still missing, or tap Send to the business.': 'Manda una más si todavía falta una esquina, o toca Enviar al negocio.',
@@ -149,6 +150,8 @@ const RULES = [
   // tile
   [/^(?:Combined from (\d+) photos: the floor|The floor) is about (.+?) by (.+?) \(([\d,.]+) sq ft\)\. In (.+?) × (.+?) in tile that’s (\d+) tiles laid, plus (\d+)% extra for cuts and mistakes: buy (\d+) tiles\.(?: (Send one more if a corner is still missing, or tap Send to the business\.|That’s the limit of 4 photos; tap Send to the business\.))?$/, (m) =>
     `${m[1] ? `Combinando ${m[1]} fotos: el piso` : 'El piso'} mide unos ${units(m[2])} por ${units(m[3])} (${m[4]} pies cuadrados). Con baldosas de ${m[5]} × ${m[6]} pulg. son ${m[7]} baldosas colocadas, más ${m[8]}% extra para cortes y errores: compra ${m[9]} baldosas.${m[10] ? ` ${es(m[10])}` : ''}`],
+  [/^Combined from (\d+) photos: the room is about (.+?) by (.+?); the floor to tile is ([\d,.]+) sq ft \(the floor isn’t a plain rectangle: a vanity, tub or toilet takes up part of it\)\. In (.+?) × (.+?) in tile that’s (\d+) tiles laid, plus (\d+)% extra for cuts and mistakes: buy (\d+) tiles\.(?: (Send one more if a corner is still missing, or tap Send to the business\.|That’s the limit of 4 photos; tap Send to the business\.))?$/, (m) =>
+    `Combinando ${m[1]} fotos: el cuarto mide unos ${units(m[2])} por ${units(m[3])}; el piso a enlosar es de ${m[4]} pies cuadrados (el piso no es un rectángulo simple: un lavabo, una tina o un inodoro ocupan parte). Con baldosas de ${m[5]} × ${m[6]} pulg. son ${m[7]} baldosas colocadas, más ${m[8]}% extra para cortes y errores: compra ${m[9]} baldosas.${m[10] ? ` ${es(m[10])}` : ''}`],
   [/^About (\d+) sq ft so far$/, (m) => `Unos ${m[1]} pies cuadrados por ahora`],
   [/^I can see part of the floor: about (\d+) sq ft so far\. (.+)$/, (m) => `Veo parte del piso: unos ${m[1]} pies cuadrados por ahora. ${es(m[2])}`],
   [/^Photo (\d+): (.+)$/, (m, s) => (es(m[2]) === m[2] ? s : `Foto ${m[1]}: ${es(m[2])}`)],

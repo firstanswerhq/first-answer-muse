@@ -84,13 +84,18 @@ export async function sparkWrite({ system, facts, timeoutMs = 6000 }) {
   const r = await api().chat.completions.create({
     model: SPARK,
     reasoning_effort: 'low',
-    max_completion_tokens: 600,
+    // Spark's reasoning tokens come out of this budget too: the tile task's facts (layout, cut list, five
+    // shopping lines) had it spend the whole 600 on thinking and return no text. 1,500 leaves room.
+    max_completion_tokens: 1500,
     messages: [
       { role: 'developer', content: system },
       { role: 'user', content: typeof facts === 'string' ? facts : JSON.stringify(facts) },
     ],
   }, { timeout: timeoutMs, maxRetries: 0 });
-  return String(r.choices[0].message.content || '').trim();
+  const text = String(r.choices?.[0]?.message?.content || '').trim();
+  // No text and the budget ran out: say so (the panel shows it), rather than a silent empty string.
+  if (!text && r.choices?.[0]?.finish_reason === 'length') throw new Error('Spark returned no text: it used its whole token budget thinking');
+  return text;
 }
 
 // Muse Spark looks at several images at once (the photo with SAM's outlines drawn on it, and a close-up

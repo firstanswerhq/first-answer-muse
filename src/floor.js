@@ -26,7 +26,16 @@ import { rulerMap, maskBoundary, measureFlat, applyH, homography } from './flat.
 export const CELL_MM = 25;
 export const MAX_GAP_MM = 1000;
 export const MAX_PHOTOS = 4;
-export const MIN_FILL = 0.9; // the union must fill at least this much of its bounding rectangle to be called a room
+// How much of its bounding rectangle the union fills. At RECT_FILL and above the floor is a plain
+// rectangle and the rectangle's area is the floor. Between MIN_FILL and RECT_FILL the floor is real but
+// not a plain rectangle (a vanity, tub or toilet takes a bite: the first real bathroom pair filled 78%),
+// so the union's own area is the floor to tile. Under MIN_FILL the photos probably did not line up.
+export const RECT_FILL = 0.9;
+export const MIN_FILL = 0.55;
+// Two photos of the same floor with the same sheet both see the floor around the sheet, so their floors
+// overlap by a good share of the smaller one; a pair under this did not line up (the half-turn was wrong
+// or the sheet moved). This is the alignment check; fill is about the room's shape.
+export const MIN_PAIR_OVERLAP = 0.4;
 const REACH_MM = 15000; // nothing on the floor is more than 15 m from the paper; farther points are a blown-up map
 const MAX_AREA_MM2 = 200e6; // 200 m²: no room a sheet of paper can measure is bigger
 const CORNER_PX = 0.35; // how well a sheet's corner is known on the photo (a line fit through the mask's edge pixels)
@@ -178,7 +187,7 @@ function gapMm(a, b, cellMm) {
  * (an L-shaped room, or a photo that did not line up: a room is a rectangle, and a misplaced photo
  * makes a cross that fills far less of one).
  */
-export function combineFloors(photos, { cellMm = CELL_MM, maxGapMm = MAX_GAP_MM, minFill = MIN_FILL } = {}) {
+export function combineFloors(photos, { cellMm = CELL_MM, maxGapMm = MAX_GAP_MM, minFill = MIN_FILL, rectFill = RECT_FILL, minPairOverlap = MIN_PAIR_OVERLAP } = {}) {
   if (!photos.length) return { ok: false, reason: 'no photos' };
   let union = null;
   const placed = [];
@@ -207,11 +216,21 @@ export function combineFloors(photos, { cellMm = CELL_MM, maxGapMm = MAX_GAP_MM,
   const xMm = (i1 - i0 + 1) * cellMm, yMm = (j1 - j0 + 1) * cellMm;
   const fill = Math.round((areaMm2 / (xMm * yMm)) * 100) / 100;
   const placed2 = placed.map((q) => ({ flipped: q.flipped, coverage: Math.round((q.cells.size / union.size) * 100) / 100, overlapCells: q.overlapCells, gapMm: q.gapMm || 0 }));
-  if (fill < minFill) return { ok: false, refused: null, fill, sqft: Math.round(areaMm2 / 92903.04), widthMm: Math.min(xMm, yMm), lengthMm: Math.max(xMm, yMm), photos: placed2 };
+  const shape = { fill, sqft: Math.round(areaMm2 / 92903.04), widthMm: Math.min(xMm, yMm), lengthMm: Math.max(xMm, yMm), photos: placed2 };
+  // Alignment: every pair of photos must share a good part of the smaller one's floor.
+  let worstPair = 1, pair = null;
+  for (let a = 0; a < placed.length; a++) for (let b = a + 1; b < placed.length; b++) {
+    const r = overlap(placed[a].cells, placed[b].cells) / Math.min(placed[a].cells.size, placed[b].cells.size);
+    if (r < worstPair) { worstPair = r; pair = [a, b]; }
+  }
+  if (pair && worstPair < minPairOverlap) return { ok: false, refused: null, misaligned: pair, pairOverlap: Math.round(worstPair * 100) / 100, ...shape };
+  if (fill < minFill) return { ok: false, refused: null, ...shape };
   return {
     ok: true,
     areaMm2,
     fill,
+    rectangle: fill >= rectFill, // false: the floor to tile is the union's area, not the rectangle's
+    pairOverlap: Math.round(worstPair * 100) / 100,
     sqft: Math.round(areaMm2 / 92903.04),
     widthMm: Math.min(xMm, yMm),
     lengthMm: Math.max(xMm, yMm),

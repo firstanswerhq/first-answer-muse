@@ -321,10 +321,32 @@ async function measureAll({ dataUrl, dataUrls = null, text = '', focal35 = null,
 
 // Muse Spark checks SAM's outlines (every photo's, for a multi-photo floor) while it words the answer
 // (in parallel, to save time). If it disagrees with what SAM outlined, no number goes out as it is.
+// Several photos' checks share one budget: the single-photo timeout plus CHECK_EXTRA_MS per further photo
+// (capped), run two at a time so the drawing (a worker thread each) and Spark's replies don't all fight
+// for the same seconds and time out together, as they did on the first live run.
+export const CHECK_EXTRA_MS = 6000;
+export const CHECK_BUDGET_MAX_MS = 30000;
+export const checkBudgetMs = (n, base = CHECK_TIMEOUT_MS) => Math.min(CHECK_BUDGET_MAX_MS, base + CHECK_EXTRA_MS * Math.max(0, n - 1));
+async function runChecks({ checks, dataUrl, live, pipeline, timeoutMs }) {
+  if (checks.length <= 1) return Promise.all(checks.map((c) => checkOutlines({ dataUrl: c.dataUrl || dataUrl, live, check: c, pipeline, timeoutMs, label: c.label })));
+  const deadline = performance.now() + checkBudgetMs(checks.length, timeoutMs);
+  const out = new Array(checks.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < checks.length) {
+      const i = next++;
+      const left = Math.max(2000, Math.round(deadline - performance.now()));
+      out[i] = await checkOutlines({ dataUrl: checks[i].dataUrl || dataUrl, live, check: checks[i], pipeline, timeoutMs: Math.min(timeoutMs, left), label: checks[i].label });
+    }
+  };
+  await Promise.all([worker(), worker()]);
+  return out;
+}
+
 async function checkAndWord({ r, dataUrl, text, focal35, live, pipeline, sam, wordTimeoutMs, checkTimeoutMs }) {
   const checks = pipeline.checks || (pipeline.check ? [pipeline.check] : []);
   const [chks] = await Promise.all([
-    live?.check && checks.length ? Promise.all(checks.map((c) => checkOutlines({ dataUrl: c.dataUrl || dataUrl, live, check: c, pipeline, timeoutMs: checkTimeoutMs, label: c.label }))) : [],
+    live?.check && checks.length ? runChecks({ checks, dataUrl, live, pipeline, timeoutMs: checkTimeoutMs }) : [],
     live?.word ? wordAnswer(r, live, pipeline, wordTimeoutMs) : null,
   ]);
   // The per-photo checks finish in any order; the panel lists them by photo.
@@ -620,28 +642,37 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
 
 // The tile answer from a room's sides in inches: tiles to buy, layout, cut list. photos > 1 when the room
 // was combined from several photos on the paper's plane (floorMultiFlow).
-function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], photos = 1, ...base }) {
+function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], photos = 1, floorSqft = null, ...base }) {
   const tw = read.tile_w_in || 12, tl = read.tile_l_in || read.tile_w_in || 12;
   const p = tilePlan({ roomW, roomL, tileW: tw, tileL: tl });
-  base.pipeline.add({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles: p.buyTiles, cuts: p.cuts?.length } });
+  // floorSqft: the floor is not a plain rectangle (a vanity, tub or toilet takes a bite), so the floor to
+  // tile is the union's area, less than the room's rectangle. Tiles to buy follow the open floor; the
+  // layout and cut list still come from the rectangle (the walls), and the steps say so.
+  const open = floorSqft != null && floorSqft < p.room.sqft;
+  const sqft = open ? Math.round(floorSqft * 10) / 10 : p.room.sqft;
+  const tilesForFloor = open ? Math.ceil((sqft * 144) / (tw * tl)) : p.tilesForFloor;
+  const buyTiles = open ? Math.ceil(tilesForFloor * (1 + p.extraPct / 100)) : p.buyTiles;
+  base.pipeline.add({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles, cuts: p.cuts?.length, ...(open ? { openFloorSqft: sqft } : {}) } });
   const pmPct = Math.round(plusMinusPct * 100);
-  const size = `${ftIn(roomW / 12)} by ${ftIn(roomL / 12)} (${p.room.sqft} sq ft)`;
-  const first = photos > 1 ? `Combined from ${photos} photos: the floor is about ${size}.` : `The floor is about ${size}.`;
+  const room = `${ftIn(roomW / 12)} by ${ftIn(roomL / 12)}`;
+  const first = open
+    ? `Combined from ${photos} photos: the room is about ${room}; the floor to tile is ${sqft} sq ft (the floor isn’t a plain rectangle: a vanity, tub or toilet takes up part of it).`
+    : photos > 1 ? `Combined from ${photos} photos: the floor is about ${room} (${sqft} sq ft).` : `The floor is about ${room} (${sqft} sq ft).`;
   const next = photos > 1 ? ` ${photos < MAX_PHOTOS ? NEXT_OR_SEND : AT_LIMIT}` : '';
   return finish({
     ...base, read,
-    headline: `Buy ${p.buyTiles} tiles`,
+    headline: `Buy ${buyTiles} tiles`,
     business: {
-      job: `Tile a ${ftIn(roomW / 12)} × ${ftIn(roomL / 12)} floor: ${p.room.sqft} sq ft${photos > 1 ? ` (from ${photos} photos)` : ''}`,
-      materials: [`${p.buyTiles} tiles, ${tw} × ${tl} in`, 'Thinset, grout and spacers'],
-      quote: `${p.room.sqft} sq ft × $X per sq ft installed (set by the business)`,
+      job: open ? `Tile ${sqft} sq ft of floor in a ${ftIn(roomW / 12)} × ${ftIn(roomL / 12)} room (from ${photos} photos; not a plain rectangle)` : `Tile a ${ftIn(roomW / 12)} × ${ftIn(roomL / 12)} floor: ${sqft} sq ft${photos > 1 ? ` (from ${photos} photos)` : ''}`,
+      materials: [`${buyTiles} tiles, ${tw} × ${tl} in`, 'Thinset, grout and spacers'],
+      quote: `${sqft} sq ft × $X per sq ft installed (set by the business)`,
     },
-    job: { sqft: p.room.sqft },
-    answer: `${first} In ${tw} × ${tl} in tile that’s ${p.tilesForFloor} tiles laid, plus ${p.extraPct}% extra for cuts and mistakes: buy ${p.buyTiles} tiles.${next}`,
-    photos, wantMore: photos > 1 && photos < MAX_PHOTOS,
-    numbers: [{ label: 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: 'Area', value: `${p.room.sqft} sq ft` }, { label: 'Range', value: `${Math.round(p.room.sqft * (1 - 2 * plusMinusPct))} – ${Math.round(p.room.sqft * (1 + 2 * plusMinusPct))} sq ft (±${2 * pmPct}%)` }, ...(photos > 1 ? [{ label: 'Photos', value: `${photos} photos` }] : []), { label: 'Full tiles', value: String(p.fullTiles) }, { label: 'Buy', value: `${p.buyTiles} tiles (+${p.extraPct}%)` }],
-    shopping: [`${p.buyTiles} tiles, ${tw} × ${tl} in (same lot number on every box)`, 'Thinset mortar and a notched trowel (ask the store which notch fits your tile)', 'Grout and 1/8 in spacers', 'Tile cutter or wet saw'],
-    steps: [`Start at the center of the room: ${p.layout.across} across, ${p.layout.along} along.`, ...p.cuts.map((c) => `${c.count} × ${c.what}: ${c.cut}.`), 'Tape-measure one wall before the first cut.'],
+    job: { sqft },
+    answer: `${first} In ${tw} × ${tl} in tile that’s ${tilesForFloor} tiles laid, plus ${p.extraPct}% extra for cuts and mistakes: buy ${buyTiles} tiles.${next}`,
+    photos, wantMore: photos > 1 && photos < MAX_PHOTOS, openFloor: open || undefined,
+    numbers: [{ label: open ? 'Room' : 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: open ? 'Floor to tile' : 'Area', value: `${sqft} sq ft` }, { label: 'Range', value: `${Math.round(sqft * (1 - 2 * plusMinusPct))} – ${Math.round(sqft * (1 + 2 * plusMinusPct))} sq ft (±${2 * pmPct}%)` }, ...(photos > 1 ? [{ label: 'Photos', value: `${photos} photos` }] : []), ...(open ? [] : [{ label: 'Full tiles', value: String(p.fullTiles) }]), { label: 'Buy', value: `${buyTiles} tiles (+${p.extraPct}%)` }],
+    shopping: [`${buyTiles} tiles, ${tw} × ${tl} in (same lot number on every box)`, 'Thinset mortar and a notched trowel (ask the store which notch fits your tile)', 'Grout and 1/8 in spacers', 'Tile cutter or wet saw'],
+    steps: [`Start at the center of the room: ${p.layout.across} across, ${p.layout.along} along.`, ...p.cuts.map((c) => `${c.count} × ${c.what}: ${c.cut}.`), ...(open ? ['The cut list is for the open floor; fixtures take their own cuts.'] : []), 'Tape-measure one wall before the first cut.'],
     confidence: confidence === 'good' ? 'fair' : confidence,
     ask: [...notes, photos > 1 ? `Combined from ${photos} photos — check one wall with a tape before cutting.` : 'Measured from one photo — check one wall with a tape before cutting.'].join(' '),
   });
@@ -763,13 +794,18 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
   const k2 = photos.length; // photos that were combined (dropped ones excepted)
   const base = { task: read.task, read, pipeline, measuredAgainst: rulerSpec(refKind), overlays };
   if (!c.ok) {
-    const why = c.refused != null ? `photo ${photos[c.refused].index + 1} doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved` : `the floor seen in the photos fills only ${Math.round((c.fill || 0) * 100)}% of a rectangle, so either the room isn’t a rectangle or a photo didn’t line up`;
-    pipeline.add({ model: 'first-answer math', step: `combine ${k2} photos on the ${R.label}’s plane`, result: { combined: false, photo: c.refused != null ? photos[c.refused].index + 1 : null, gapMm: c.gapMm ?? null, fill: c.fill ?? null, why: c.refused != null ? 'does not touch the floor in the other photos' : `fills only ${Math.round((c.fill || 0) * 100)}% of a rectangle` } });
+    const why = c.refused != null ? `photo ${photos[c.refused].index + 1} doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved`
+      : c.misaligned ? `photos ${photos[c.misaligned[0]].index + 1} and ${photos[c.misaligned[1]].index + 1} share only ${Math.round(c.pairOverlap * 100)}% of the floor around the sheet, so one of them didn’t line up (or the paper moved)`
+      : `the floor seen in the photos fills only ${Math.round((c.fill || 0) * 100)}% of a rectangle, so a photo probably didn’t line up`;
+    pipeline.add({ model: 'first-answer math', step: `combine ${k2} photos on the ${R.label}’s plane`, result: { combined: false, photo: c.refused != null ? photos[c.refused].index + 1 : null, gapMm: c.gapMm ?? null, fill: c.fill ?? null, why: c.refused != null ? 'does not touch the floor in the other photos' : c.misaligned ? `photos ${photos[c.misaligned[0]].index + 1} and ${photos[c.misaligned[1]].index + 1} overlap only ${Math.round(c.pairOverlap * 100)}%` : `fills only ${Math.round((c.fill || 0) * 100)}% of a rectangle` } });
     // The best single photo: the finest map at the sheet (fewest mm per pixel), never the biggest floor
-    // (a blown-up map is the biggest floor). Its own range, from the sheet's corner error, is used.
+    // (a blown-up map is the biggest floor). A photo that shows only part of the floor answers as the
+    // partial it is ("so far"), never as the room.
     const k = photos.indexOf(photos.reduce((a, b) => (b.mmPerPx < a.mmPerPx ? b : a)));
     const m = photos[k].measured;
-    const r = tileAnswer({ ...base, overlay: overlays[0], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: Math.max(m.plusMinusPct, photos[k].plusMinusPct), confidence: m.confidence, notes: photos[k].notes });
+    const r = m.clipped
+      ? partialFloorAnswer({ ...base, overlay: overlays[0], m, photos: 1 })
+      : tileAnswer({ ...base, overlay: overlays[0], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: Math.max(m.plusMinusPct, photos[k].plusMinusPct), confidence: m.confidence, notes: photos[k].notes });
     r.note = `The photos weren’t combined: ${why}. This answer is from photo ${photos[k].index + 1} alone. ${MULTI_PAPER_TIP}`;
     r.combined = { photos: k2, ok: false, from: photos[k].index + 1, fill: c.fill ?? null };
     r.photos = k2;
@@ -777,10 +813,10 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
     return withDrops(r);
   }
   const coverage = c.photos.map((p, i) => `photo ${photos[i].index + 1} ${Math.round(p.coverage * 100)}%`).join(', ');
-  pipeline.add({ model: 'first-answer math', step: `combine ${k2} photos on the ${R.label}’s plane`, result: { sqftSeen: c.sqft, widthFt: Math.round((c.widthMm / 304.8) * 10) / 10, lengthFt: Math.round((c.lengthMm / 304.8) * 10) / 10, fill: `${Math.round(c.fill * 100)}%`, coverage, turned: c.photos.filter((p) => p.flipped).length, plusMinusPct: c.plusMinusPct } });
+  pipeline.add({ model: 'first-answer math', step: `combine ${k2} photos on the ${R.label}’s plane`, result: { sqftSeen: c.sqft, widthFt: Math.round((c.widthMm / 304.8) * 10) / 10, lengthFt: Math.round((c.lengthMm / 304.8) * 10) / 10, fill: `${Math.round(c.fill * 100)}%${c.rectangle ? '' : ' (not a plain rectangle: the floor seen is the area)'}; photos overlap ${Math.round(c.pairOverlap * 100)}%`, coverage, turned: c.photos.filter((p) => p.flipped).length, plusMinusPct: c.plusMinusPct } });
   const notes = [...new Set(photos.flatMap((p) => p.notes))];
-  const r = tileAnswer({ ...base, overlay: overlays[0], roomW: c.widthMm / 25.4, roomL: c.lengthMm / 25.4, plusMinusPct: c.plusMinusPct, confidence: photos.every((p) => p.confidence === 'good') ? 'good' : 'low', notes, photos: k2 });
-  r.combined = { photos: k2, ok: true, sqft: c.sqft, fill: c.fill, coverage: c.photos.map((p) => p.coverage), turned: c.photos.map((p) => p.flipped) };
+  const r = tileAnswer({ ...base, overlay: overlays[0], roomW: c.widthMm / 25.4, roomL: c.lengthMm / 25.4, plusMinusPct: c.plusMinusPct, confidence: photos.every((p) => p.confidence === 'good') ? 'good' : 'low', notes, photos: k2, floorSqft: c.rectangle ? null : c.areaMm2 / 92903.04 });
+  r.combined = { photos: k2, ok: true, sqft: c.sqft, fill: c.fill, rectangle: c.rectangle, pairOverlap: c.pairOverlap, coverage: c.photos.map((p) => p.coverage), turned: c.photos.map((p) => p.flipped) };
   return withDrops(r);
 }
 const NO_SHEET = 'I can’t line that one up without the paper. Send it again with the whole sheet in the shot (and leave the sheet where it is).';
@@ -1117,7 +1153,7 @@ async function wordAnswer(r, live, pipeline, timeoutMs = WORD_TIMEOUT_MS) {
       r.language = wrote;
       pipeline.add({ ...step, ms: ms(), result: { used: true, numbersChecked: numbersIn(text).length, language: wrote } });
     } else {
-      pipeline.add({ ...step, ms: ms(), result: { used: false, fellBack: check.reason } });
+      pipeline.add({ ...step, ms: ms(), result: { used: false, fellBack: check.reason === 'empty' ? 'Spark returned no text' : check.reason } });
     }
   } catch (e) {
     pipeline.add({ ...step, ms: ms(), error: String(e.message).slice(0, 200), result: { used: false, fellBack: friendlyError(e.message) } });
@@ -1228,6 +1264,7 @@ export function friendlyError(msg) {
   const m = String(msg?.message ?? msg ?? '');
   const t = m.match(/no reply in ([\d.]+) s/);
   if (t) return `no reply in ${t[1]} s`;
+  if (/returned no text/i.test(m)) return 'Spark returned no text (its whole token budget went to thinking)';
   if (/daily (?:limit|cap)|budget/i.test(m)) return 'today’s limit of Meta calls is used up';
   if (/\b429\b|rate limit/i.test(m)) return 'Meta was busy (rate limited)';
   if (/\b(?:401|403)\b|unauthori[sz]ed|api key/i.test(m)) return 'Meta turned the request away';
@@ -1258,9 +1295,9 @@ export function stepDetail(s) {
   }
   if (r.withheld) return r.why === 'retake' ? 'measured, but not sent: a photo needs a retake' : 'measured, but not sent: Spark disagreed with the outlines';
   if (r.corrected === false) return `nothing new from SAM (${r.why}); no number sent`;
-  if (r.combined === false) return `not combined: ${r.photo ? `photo ${r.photo} ${r.why}` : `the union ${r.why}`}${r.gapMm ? ` (${Math.round(r.gapMm / 304.8 * 10) / 10} ft away)` : ''}; best single photo used`;
+  if (r.combined === false) return `not combined: ${r.photo ? `photo ${r.photo} ${r.why}` : /^photos/.test(r.why) ? r.why : `the union ${r.why}`}${r.gapMm ? ` (${Math.round(r.gapMm / 304.8 * 10) / 10} ft away)` : ''}; best single photo used`;
   if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}${r.language === 'es' ? ' · language: Spanish' : ''}`;
-  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)', sqftSeen: 'floor seen (sq ft)', turned: 'turned 180°', fill: 'fills a rectangle', farWallErrorIn: 'far wall error from the sheet’s corners (in)' };
+  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)', sqftSeen: 'floor seen (sq ft)', turned: 'turned 180°', fill: 'fills a rectangle', pairOverlap: 'photos overlap', openFloorSqft: 'open floor (sq ft)', farWallErrorIn: 'far wall error from the sheet’s corners (in)' };
   const pretty = (k) => NAMED[k] || k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\s?Mm2\b/, ' mm²').replace(/\s?Mm\b/, ' mm').replace(/\s?Ft\b/, ' ft').replace(/\s?In2\b/, ' sq in').replace(/\s?Pct\b/, ' %').toLowerCase();
   const keep = Object.entries(r).filter(([k, v]) => !['ok', 'notes', 'reason', 'clipped'].includes(k) && v != null && ['number', 'string', 'boolean'].includes(typeof v));
   return keep.slice(0, 5).map(([k, v]) => `${pretty(k)}: ${typeof v === 'number' ? (k.endsWith('Pct') ? `±${Math.round(v * 100)}%` : Math.round(v * 100) / 100) : v}`).join(' · ');
