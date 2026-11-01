@@ -83,6 +83,7 @@ const EXACT = {
 // Tips and notes: known phrases replaced inside a longer tip (tips are joined with "; " or " ").
 const PHRASES = [
   ['ruler shape looks off; is it partly hidden or bent?', 'la forma de la referencia se ve rara; ¿está tapada o doblada?'],
+  ['the ruler is small in the photo, so which side is its long side is a guess; get closer to it', 'la referencia se ve pequeña en la foto, así que cuál es su lado largo es una adivinanza; acércate a ella'],
   ['coin is small in the photo; move closer', 'la moneda se ve pequeña en la foto; acércate'],
   ['photo taken at a steep angle; shoot from straight above', 'la foto está muy inclinada; tómala desde arriba, derecho'],
   ['for something this big, lay a sheet of paper or a gift card next to it instead of a coin', 'para algo tan grande, pon una hoja de papel o una tarjeta al lado en vez de una moneda'],

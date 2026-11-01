@@ -692,7 +692,7 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
   // A refused answer shows no number anywhere: our math's steps for the other photos are withheld too.
   // The page draws r.overlay on the first photo and overlays[i] on photo i + 1, so the main overlay is always photo 1's.
   const fail = (i, ask) => {
-    for (const p of pipeline) if (p.model === 'first-answer math' && p.result) { p.result = { withheld: true }; delete p.error; }
+    for (const p of pipeline) if (p.model === 'first-answer math' && p.result) { p.result = { withheld: true, why: 'retake' }; delete p.error; }
     return { ...finishErr(read, pipeline, ask, null, overlays[0]), overlays, photo: i + 1 };
   };
   for (let i = 0; i < n; i++) {
@@ -706,6 +706,7 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
     const f = floorOnPaper({ target: found[i].target, ref: found[i].ruler, refKind, focal35 });
     pipeline.add({ model: 'first-answer math', step: `${label(i)}: map the floor onto the ${R.label}’s plane`, result: f.ok ? { sqftSeen: Math.round(f.areaMm2 * SQFT_PER_MM2), plusMinusPct: f.plusMinusPct, confidence: f.confidence } : { ok: false, reason: f.reason } });
     if (!f.ok) return fail(i, `I couldn’t measure ${label(i)}: ${f.reason}. Retake that one, and leave the paper where it is.`);
+    if (f.errorMm != null) pipeline.at(-1).result.farWallErrorIn = Math.round(f.errorMm / 25.4);
     photos.push(f);
   }
 
@@ -717,10 +718,11 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
   if (!c.ok) {
     const why = c.refused != null ? `photo ${c.refused + 1} doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved` : `the floor seen in the photos fills only ${Math.round((c.fill || 0) * 100)}% of a rectangle, so either the room isn’t a rectangle or a photo didn’t line up`;
     pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { combined: false, photo: c.refused != null ? c.refused + 1 : null, gapMm: c.gapMm ?? null, fill: c.fill ?? null, why: c.refused != null ? 'does not touch the floor in the other photos' : `fills only ${Math.round((c.fill || 0) * 100)}% of a rectangle` } });
-    // The best single photo: the tightest range, then the most floor seen.
-    const k = photos.indexOf(photos.reduce((a, b) => (b.plusMinusPct < a.plusMinusPct || (b.plusMinusPct === a.plusMinusPct && b.areaMm2 > a.areaMm2) ? b : a)));
+    // The best single photo: the finest map at the sheet (fewest mm per pixel), never the biggest floor
+    // (a blown-up map is the biggest floor). Its own range, from the sheet's corner error, is used.
+    const k = photos.indexOf(photos.reduce((a, b) => (b.mmPerPx < a.mmPerPx ? b : a)));
     const m = photos[k].measured;
-    const r = tileAnswer({ ...base, overlay: overlays[0], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: m.plusMinusPct, confidence: m.confidence, notes: m.notes });
+    const r = tileAnswer({ ...base, overlay: overlays[0], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: Math.max(m.plusMinusPct, photos[k].plusMinusPct), confidence: m.confidence, notes: photos[k].notes });
     r.note = `The photos weren’t combined: ${why}. This answer is from photo ${k + 1} alone. ${MULTI_PAPER_TIP}`;
     r.combined = { photos: n, ok: false, from: k + 1, fill: c.fill ?? null };
     return r;
@@ -1202,11 +1204,11 @@ export function stepDetail(s) {
     if (r.check === 'agrees') return `agrees · ${seen}`;
     return r.fix ? `disagrees · ${what}; Spark told SAM what to look for${r.fix === 'a point' ? ' (a point)' : `: “${r.fix}”`}` : `disagrees · ${what}; no number sent`;
   }
-  if (r.withheld) return 'measured, but not sent: Spark disagreed with the outlines';
+  if (r.withheld) return r.why === 'retake' ? 'measured, but not sent: a photo needs a retake' : 'measured, but not sent: Spark disagreed with the outlines';
   if (r.corrected === false) return `nothing new from SAM (${r.why}); no number sent`;
   if (r.combined === false) return `not combined: ${r.photo ? `photo ${r.photo} ${r.why}` : `the union ${r.why}`}${r.gapMm ? ` (${Math.round(r.gapMm / 304.8 * 10) / 10} ft away)` : ''}; best single photo used`;
   if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}${r.language === 'es' ? ' · language: Spanish' : ''}`;
-  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)', sqftSeen: 'floor seen (sq ft)', turned: 'turned 180°', fill: 'fills a rectangle' };
+  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)', sqftSeen: 'floor seen (sq ft)', turned: 'turned 180°', fill: 'fills a rectangle', farWallErrorIn: 'far wall error from 1 px on the sheet (in)' };
   const pretty = (k) => NAMED[k] || k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\s?Mm2\b/, ' mm²').replace(/\s?Mm\b/, ' mm').replace(/\s?Ft\b/, ' ft').replace(/\s?In2\b/, ' sq in').replace(/\s?Pct\b/, ' %').toLowerCase();
   const keep = Object.entries(r).filter(([k, v]) => !['ok', 'notes', 'reason', 'clipped'].includes(k) && v != null && ['number', 'string', 'boolean'].includes(typeof v));
   return keep.slice(0, 5).map(([k, v]) => `${pretty(k)}: ${typeof v === 'number' ? (k.endsWith('Pct') ? `±${Math.round(v * 100)}%` : Math.round(v * 100) / 100) : v}`).join(' · ');

@@ -40,9 +40,16 @@ export const FLAT_REFERENCES = {
 
 const MM_PER_IN = 25.4;
 // A rectangle ruler's fit score (longSideFirst) above this means the outline is not that rectangle (hidden,
-// bent, or the wrong thing): the true one scores about 0.05 to 0.3 for a small far sheet, the wrong
-// side assignment about 0.7.
-export const RECT_FIT_LIMIT = 0.5;
+// bent, or the wrong thing), or is too small to read: with exact corners the true assignment scores 0.00
+// and the wrong one about 0.5; mask corners of a sheet under 60 px add up to about 0.2 of noise.
+export const RECT_FIT_LIMIT = 0.25;
+// When the two assignments score within this of each other, or the sheet's short side on the photo is
+// under RECT_MIN_PX, the long-edge choice is a coin toss (a sweep of 1,857 rendered poses, by the SAM
+// box's short side: 0 wrong at 90 px and up, 1% at 60–90 px, 6% at 40–60 px, 10% under 40 px): the
+// answer is marked rough, and a multi-photo floor asks for that photo again. RECT_MIN_PX is measured
+// on the fitted corners, which sit about 5 px inside SAM's box, so 55 here is the sweep's 60.
+export const RECT_MARGIN_MIN = 0.1;
+export const RECT_MIN_PX = 55;
 const frameOf = (o) => o?.frame || null;
 
 // Pixel centers of a SAM object's mask, in photo pixels. Thinned to at most ~maxPts points
@@ -297,6 +304,8 @@ function rectMap(refPts, R, boundary = [], frame = null, focal35 = null) {
   const c = refineCorners(rough, boundary);
   const side = (i) => Math.hypot(c[(i + 1) % 4][0] - c[i][0], c[(i + 1) % 4][1] - c[i][1]);
   const { longFirst, how, scores } = longSideFirst(c, R, frame, focal35);
+  const xs = c.map((p) => p[0]), ys = c.map((p) => p[1]);
+  const shortPx = Math.min(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
   const [W, Hh] = longFirst ? [R.long, R.short] : [R.short, R.long];
   const dst = [[0, 0], [W, 0], [W, Hh], [0, Hh]];
   const H = homography(c, dst);
@@ -304,7 +313,7 @@ function rectMap(refPts, R, boundary = [], frame = null, focal35 = null) {
   const ratio = Math.max(side(0) + side(2), side(1) + side(3)) / Math.min(side(0) + side(2), side(1) + side(3));
   // H and the ruler's extent (W × Hh mm, from the corner at the origin) are kept so floor.js can map
   // several photos onto one paper's plane.
-  return { toMm: (p) => applyH(H, p), areaScale: (p) => jacobianDet(H, p[0], p[1]), corners: c, shapeCheck: ratio, fit: scores ? Math.min(...scores) : null, H, extentMm: [W, Hh], longSideBy: how };
+  return { toMm: (p) => applyH(H, p), areaScale: (p) => jacobianDet(H, p[0], p[1]), corners: c, shapeCheck: ratio, fit: scores ? Math.min(...scores) : null, margin: scores ? Math.abs(scores[0] - scores[1]) : null, shortPx, H, extentMm: [W, Hh], longSideBy: how };
 }
 
 // Focal length in pixels: from the photo's 35 mm-equivalent focal length when known, else a typical
@@ -388,6 +397,7 @@ export function measureFlat({ target, ref, refKind, focal35 = null }) {
     const expected = R.long / R.short;
     const off = map.fit != null ? map.fit > RECT_FIT_LIMIT : Math.abs(map.shapeCheck - expected) / expected > 0.45;
     if (off) { confidence = 'low'; notes.push('ruler shape looks off; is it partly hidden or bent?'); }
+    else if (map.margin != null && (map.margin < RECT_MARGIN_MIN || map.shortPx < RECT_MIN_PX)) { confidence = 'low'; notes.push('the ruler is small in the photo, so which side is its long side is a guess; get closer to it'); }
   } else {
     if (map.radiusPx < 15) { confidence = 'low'; notes.push('coin is small in the photo; move closer'); }
     if (map.tiltDeg > 55) { confidence = 'low'; notes.push('photo taken at a steep angle; shoot from straight above'); }

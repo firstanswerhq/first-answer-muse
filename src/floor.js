@@ -21,7 +21,7 @@
 // number is refused.
 
 import { decodeMaskToRaster } from '@meta-sam/parser';
-import { rulerMap, maskBoundary, measureFlat, applyH } from './flat.js';
+import { rulerMap, maskBoundary, measureFlat, applyH, homography } from './flat.js';
 
 export const CELL_MM = 25;
 export const MAX_GAP_MM = 1000;
@@ -29,6 +29,7 @@ export const MAX_PHOTOS = 4;
 export const MIN_FILL = 0.9; // the union must fill at least this much of its bounding rectangle to be called a room
 const REACH_MM = 15000; // nothing on the floor is more than 15 m from the paper; farther points are a blown-up map
 const MAX_AREA_MM2 = 200e6; // 200 m²: no room a sheet of paper can measure is bigger
+const CORNER_PX = 0.35; // how well a sheet's corner is known on the photo (a line fit through the mask's edge pixels)
 
 // Inverse of a 3×3 homography (row-major, 9 numbers).
 export function invertH(H) {
@@ -50,11 +51,15 @@ export function invertH(H) {
 export function floorOnPaper({ target, ref, refKind = 'paper_letter', focal35 = null }) {
   const m = measureFlat({ target, ref, refKind, focal35 });
   if (!m.ok) return { ok: false, reason: m.reason };
-  // Sanity bounds: a paper that is too small or too far reads as a bent shape and blows the map up (a
-  // 2 m × 2 m floor became 4e43 mm² in a probe). Such a photo is retaken, never combined.
-  if (m.notes.some((n) => /ruler shape/.test(n))) return { ok: false, reason: 'the paper is too small or too far away in this photo to trust; get closer to it' };
+  // Sanity bounds: a paper that is too small or too far reads as a bent shape (fit score over the limit),
+  // or its long side is a guess (scores too close, short side under 60 px), and its map blows the floor
+  // up (a 2 m × 2 m floor became 4e43 mm² in a probe; a 71 × 23 px sheet gave 189 sq ft for 112). Such a
+  // photo is retaken, never combined: a multi-photo floor extrapolates meters past the sheet, so it needs
+  // a sheet it can read (RECT_MIN_PX in flat.js), where one photo only needs a rough map.
+  if (m.notes.some((n) => /ruler shape|long side is a guess/.test(n))) return { ok: false, reason: 'the paper is too small or too far away in this photo to trust; get closer to it' };
   if (m.areaMm2 > MAX_AREA_MM2) return { ok: false, reason: 'the floor came out impossibly big, so the paper was read wrong; get closer to it' };
   const map = rulerMap(ref, refKind, { focal35 });
+  if (map.shortPx < 35) return { ok: false, reason: 'the paper is too small or too far away in this photo to trust; get closer to it' };
   if (!map?.H || !map.extentMm) return { ok: false, reason: 'could not read the paper outline' };
   const Hi = invertH(map.H);
   if (!Hi) return { ok: false, reason: 'could not read the paper outline' };
@@ -87,11 +92,42 @@ export function floorOnPaper({ target, ref, refKind = 'paper_letter', focal35 = 
   if (plane.length < 3) return { ok: false, reason: 'the floor outline does not reach the paper' };
   const bounds = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
   for (const [x, y] of plane) { if (x < bounds.x0) bounds.x0 = x; if (x > bounds.x1) bounds.x1 = x; if (y < bounds.y0) bounds.y0 = y; if (y > bounds.y1) bounds.y1 = y; }
-  // In a multi-photo floor every photo is expected to see only part of the floor, so a floor that runs
-  // off the photo's edge is normal here, not a reason for a wider range (measureFlat adds 8% for it).
+  // How far off this photo's floor can be. The floor is extrapolated meters past a sheet that is a
+  // hundred pixels wide, so a corner of the sheet read a third of a pixel off moves the far wall by a
+  // lot: each of the sheet's four corners is nudged ±0.35 px (the corners come from a straight-line fit
+  // through the mask's edge pixels, good to about a third of a pixel), the map rebuilt and the floor's
+  // extent on the plane re-measured; the four
+  // corners' worst shifts add in quadrature (they are independent) and that is this photo's error. (A
+  // sheet near a wall or in a corner widens this: more of the floor lies far from it.) A floor that
+  // runs off the photo's edge is normal here, so measureFlat's 8% for that is not added.
+  const dst = [[0, 0], [map.extentMm[0], 0], [map.extentMm[0], map.extentMm[1]], [0, map.extentMm[1]]];
+  const extent = (Hx) => {
+    const toP = (p) => { const [x, y] = applyH(Hx, p); return longFirst ? [x, y] : [y, S - x]; };
+    const b = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity };
+    for (const q of bpts) { const [x, y] = toP(q); if (x < b.x0) b.x0 = x; if (x > b.x1) b.x1 = x; if (y < b.y0) b.y0 = y; if (y > b.y1) b.y1 = y; }
+    return b;
+  };
+  let sumSq = 0;
+  for (let k = 0; k < 4; k++) {
+    let worst = 0;
+    for (const [dx, dy] of [[CORNER_PX, 0], [-CORNER_PX, 0], [0, CORNER_PX], [0, -CORNER_PX]]) {
+      const c2 = map.corners.map((q, i) => (i === k ? [q[0] + dx, q[1] + dy] : q));
+      const H2 = homography(c2, dst);
+      if (!H2) continue;
+      const b2 = extent(H2);
+      for (const key of ['x0', 'x1', 'y0', 'y1']) worst = Math.max(worst, Math.abs(b2[key] - bounds[key]));
+    }
+    sumSq += worst * worst;
+  }
+  const worstMm = Math.sqrt(sumSq);
+  const span = Math.max(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0, 1);
+  const propagated = Math.min(0.5, worstMm / span);
   const notes = m.notes.filter((n) => !/runs off the edge/.test(n));
-  const plusMinusPct = m.clipped ? Math.max(0.03, Math.round((m.plusMinusPct - 0.08) * 1000) / 1000) : m.plusMinusPct;
-  return { ok: true, sample, bounds, paper: { long: L, short: S }, areaMm2: m.areaMm2, plusMinusPct, confidence: 'good', notes, clipped: m.clipped, measured: m };
+  const plusMinusPct = Math.round(Math.max(0.03, propagated) * 1000) / 1000;
+  // mm per pixel at the sheet: how coarse this photo's map is (the fallback single photo is the finest).
+  const cxy = map.corners.reduce((a, q) => [a[0] + q[0] / 4, a[1] + q[1] / 4], [0, 0]);
+  const mmPerPx = Math.sqrt(Math.max(0, map.areaScale(cxy)));
+  return { ok: true, sample, bounds, paper: { long: L, short: S }, areaMm2: m.areaMm2, plusMinusPct, errorMm: Math.round(worstMm), mmPerPx: Math.round(mmPerPx * 100) / 100, confidence: 'good', notes, clipped: m.clipped, measured: m };
 }
 
 // Cells as integer keys (cell indices can be negative: the paper is somewhere in the room, not at a corner).

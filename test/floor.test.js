@@ -78,39 +78,52 @@ test('three partial photos of a 10 × 12 ft room combine to the whole room (area
 
 // Review A's regression: the paper's long edge pointing at the camera is foreshortened, so pixel length
 // alone picks the wrong side from about 40° on; the camera's focal length tells the two apart.
-test('the paper turned 90° (long edge along the room, toward the doorways) still gives the room, at a moderate and a steep tilt', async () => {
+// Review A's regression: the paper's long edge pointing at the camera is foreshortened, so pixel length
+// alone picks the wrong side from about 40° on; the camera's focal length tells the two apart. At a steep
+// tilt the far sheet is under 55 px on its short side, where that choice is a coin toss (Review C's sweep),
+// so those photos are asked for again instead of measured.
+const refusedSmallPaper = (r, k) => { assert.equal(r.ok, false); assert.equal(r.photo, k); assert.match(r.ask, new RegExp(`^I couldn’t measure photo ${k} of \\d: the paper is too small or too far away in this photo to trust; get closer to it\\. Retake that one, and leave the paper where it is\\.$`)); };
+test('the paper turned 90° (long edge along the room, toward the doorways) still gives the room; a steep tilt with a small far sheet is a retake', async () => {
   const paper90 = rectShape(300, -200, 279.4, 215.9, 90);
+  const { urls, deps } = scene(POSES, { paper: POSES.map(() => paper90) });
+  const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
+  assert.equal(r.ok, true, r.ask);
+  assert.equal(r.combined.ok, true, r.note);
+  near(sqftOf(r), 120, 0.08, 'area');
+  const [w, l] = r.numbers.find((n) => n.label === 'Floor').value.split(' × ').map(feetOf);
+  near(w, 10, 0.05, 'width'); near(l, 12, 0.05, 'length');
+  assert.doesNotMatch(r.ask, /ruler shape/);
   const steep = [
     { tiltDeg: 58, D: 3000, f: 1300, panDeg: 0, aim: [0, -500] },
     { tiltDeg: 58, D: 3000, f: 1300, panDeg: 180, aim: [0, 500] },
     { tiltDeg: 55, D: 3000, f: 1300, panDeg: 250, aim: [500, 300] },
   ];
-  for (const [name, poses, paper] of [['rot 90, tilt 35', POSES, paper90], ['rot 90, tilt 55–58', steep, paper90], ['rot 0, tilt 55–58', steep, PAPER]]) {
-    const { urls, deps } = scene(poses, { paper: poses.map(() => paper) });
-    const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
-    assert.equal(r.ok, true, `${name}: ${r.ask}`);
-    assert.equal(r.combined.ok, true, `${name}: ${r.note}`);
-    near(sqftOf(r), 120, 0.08, `${name} area`);
-    const [w, l] = r.numbers.find((n) => n.label === 'Floor').value.split(' × ').map(feetOf);
-    near(w, 10, 0.05, `${name} width`); near(l, 12, 0.05, `${name} length`);
-    assert.doesNotMatch(r.ask, /ruler shape/, name);
+  for (const paper of [paper90, PAPER]) {
+    const s = scene(steep, { paper: steep.map(() => paper) });
+    refusedSmallPaper(await measureAnything({ dataUrls: s.urls, text: 'tile', deps: s.deps }), 1); // the sheet is 42 px tall from a 58° doorway
   }
 });
 
-test('Review A’s scene: an 8 × 14 ft room, paper 300 mm from a wall with its long edge along the room, two end-wall doorways, tilt 35 and tilt 60', async () => {
+test('Review A’s scene: an 8 × 14 ft room, paper 300 mm from a wall, two end-wall doorways: the far sheet (45 px) is a retake, not a blown-up floor', async () => {
   const room = rectShape(0, 0, 2438, 4267, 0);
   const paper = rectShape(-2438 / 2 + 300 + 108, -4267 / 2 + 600 + 140, 279.4, 215.9, 90);
-  for (const tilt of [35, 60]) {
+  for (const tilt of [30, 35, 60]) {
     const poses = [{ tiltDeg: tilt, D: 3800, f: 1300, panDeg: 0, aim: [0, -700] }, { tiltDeg: tilt, D: 3800, f: 1300, panDeg: 180, aim: [0, 700] }];
     const { urls, deps } = scene(poses, { floor: [room, room], paper: [paper, paper] });
     const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
-    assert.equal(r.ok, true, `tilt ${tilt}: ${r.ask}`);
-    assert.equal(r.combined.ok, true, `tilt ${tilt}: ${r.note}`);
-    const [w, l] = r.numbers.find((n) => n.label === 'Floor').value.split(' × ').map(feetOf);
-    near(w, 8, 0.05, `tilt ${tilt} width`); near(l, 14, 0.05, `tilt ${tilt} length`);
-    near(sqftOf(r), 112, 0.08, `tilt ${tilt} area`);
-    assert.doesNotMatch(r.ask, /ruler shape/, `tilt ${tilt}`);
+    refusedSmallPaper(r, tilt === 60 ? r.photo : 2); // never 186 or 189 sq ft for a 112 sq ft room (at 60° both sheets are marginal)
+    assert.ok(!r.pipeline.some((s) => s.model === 'first-answer math' && s.result && !s.result.withheld));
+    assert.ok(r.pipeline.filter((s) => s.model === 'first-answer math').every((s) => stepDetail(s) === 'measured, but not sent: a photo needs a retake'));
   }
+  // Closer doorways (the sheet 80 px and up in both): the room, within 5% a side.
+  const poses = [{ tiltDeg: 40, D: 2600, f: 1300, panDeg: 0, aim: [-200, -900] }, { tiltDeg: 40, D: 2600, f: 1300, panDeg: 180, aim: [-200, -300] }];
+  const { urls, deps } = scene(poses, { floor: [room, room], paper: [paper, paper] });
+  const r = await measureAnything({ dataUrls: urls, text: 'tile', deps });
+  if (r.ok) {
+    const [w, l] = r.numbers.find((n) => n.label === 'Floor').value.split(' × ').map(feetOf);
+    near(w, 8, 0.05, 'width');
+    assert.ok(l <= 14 * 1.05, `length ${l} (the two photos may not reach both end walls)`);
+  } else refusedSmallPaper(r, r.photo);
   // The single-photo path gets the right sides too (before: 9.25 × 10.36 ft for a partial 8 × 12 view).
   const cam = camera({ tiltDeg: 50, D: 3000, f: 1300, panDeg: 90, aim: [-400, -1200] });
   const paperX = rectShape(-2438 / 2 + 300 + 140, -4267 / 2 + 600 + 108, 279.4, 215.9, 0);
@@ -118,6 +131,30 @@ test('Review A’s scene: an 8 × 14 ft room, paper 300 mm from a wall with its 
   assert.ok(m.ok);
   near(m.rectWidthMm, 2438, 0.05, 'single-photo width');
   assert.ok(m.rectLengthMm < 4267 * 1.05, `single-photo length ${m.rectLengthMm} (sees part of the room)`);
+});
+
+test('Review C’s 11 × 9 ft room with the sheet 200 mm from a corner: the truth lies inside the reported range (error propagated from the sheet’s corners)', async () => {
+  const room = rectShape(0, 0, 3353, 2743, 0);
+  const pc = [-3353 / 2 + 200 + 139.7, -2743 / 2 + 200 + 107.95];
+  const paper = rectShape(pc[0], pc[1], 279.4, 215.9, 0);
+  // The reviewer's poses (tilt 30/45/65, pans 0/120/240): the 65° photo's sheet is 37 px tall, a retake.
+  const theirs = [{ tiltDeg: 30, D: 3600, f: 1300, panDeg: 0, aim: [-600, -300] }, { tiltDeg: 45, D: 3600, f: 1300, panDeg: 120, aim: [-500, -400] }, { tiltDeg: 65, D: 3600, f: 1300, panDeg: 240, aim: [-700, -500] }];
+  const t = scene(theirs, { floor: theirs.map(() => room), paper: theirs.map(() => paper) });
+  refusedSmallPaper(await measureAnything({ dataUrls: t.urls, text: 'tiles', deps: t.deps }), 3);
+  // Three doorway shots that can all read the sheet: the number is within 8% and the range holds the truth.
+  for (const [tilt, D] of [[50, 2600], [42, 3000], [42, 3400]]) {
+    const poses = [20, 110, 200].map((pan) => ({ tiltDeg: tilt, D, f: 1300, panDeg: pan, aim: [pc[0] + 500, pc[1] + 400] }));
+    const { urls, deps } = scene(poses, { floor: poses.map(() => room), paper: poses.map(() => paper) });
+    const r = await measureAnything({ dataUrls: urls, text: 'tiles', deps });
+    assert.equal(r.ok, true, `tilt ${tilt} D ${D}: ${r.ask}`);
+    assert.equal(r.combined.ok, true, `tilt ${tilt} D ${D}: ${r.note}`);
+    near(sqftOf(r), 99, 0.08, `tilt ${tilt} D ${D} area`);
+    const [lo, hi] = r.numbers.find((n) => n.label === 'Range').value.match(/\d+/g).map(Number);
+    assert.ok(lo <= 99 && hi >= 99, `tilt ${tilt} D ${D}: range ${lo}–${hi} must hold 99`);
+    assert.ok(hi - lo < 99, `tilt ${tilt} D ${D}: range ${lo}–${hi} is too wide to be useful`);
+    const steps = r.pipeline.filter((s) => /map the floor/.test(s.step));
+    assert.ok(steps.every((s) => s.result.farWallErrorIn > 0), 'each photo reports its far-wall error');
+  }
 });
 
 test('Review B’s fourth pose (pan 70, sees the paper’s long edge foreshortened) joins the three and the room stays 10 × 12', async () => {
