@@ -17,7 +17,7 @@ import { measureAnything, stepDetail, friendlyError, faceEnabled } from './anyth
 import { readExif } from './distance.js';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { rateLimiter, tokenOk, redactSnapshot, metaBudgetGate, clientIp, DAILY_CAP_MESSAGE } from './guard.js';
+import { rateLimiter, tokenOk, redactSnapshot, metaBudgetGate, clientIp, photoLedger, DAILY_CAP_MESSAGE } from './guard.js';
 import { MAX_PHOTOS } from './floor.js';
 import { hasKey, transcribeWav, openRealtimeTranscription, SPARK, BASE_URL, DIRECT_URL, RELAY_URL, relayHeaders } from './muse.js';
 
@@ -271,16 +271,21 @@ export function photosOf(body) {
   const urls = list.length ? list : body?.dataUrl ? [body.dataUrl] : [];
   return urls.map((u) => (typeof u === 'string' ? u : ''));
 }
-// Every photo counts against the per-IP limit (the first was counted by measureLimit already). A request
+// Every photo counts against the per-IP limit, once per 10 minutes: a floor conversation re-sends its
+// earlier photos with each new one, and those are not charged again (photoLedger, by content). A request
 // that is not even photos is refused before it costs anything.
-const extraPhotosLimit = (req, res, next) => {
+export const photosSeen = photoLedger({ windowMs: 10 * 60 * 1000, cap: 64 });
+const LIMIT_MSG = 'That’s a lot of photos in a few minutes. Give it about 10 minutes and try again.';
+const photosLimit = (req, res, next) => {
   const urls = photosOf(req.body);
   const n = urls.length;
   if (n > MAX_PHOTOS) return res.status(400).json({ ok: false, ask: `Send up to ${MAX_PHOTOS} photos of the floor.` });
   if (!n || !urls.every((u) => IMAGE_URL.test(u))) return res.status(400).json({ ok: false, ask: n > 1 ? 'Every photo must be a PNG, JPEG or WebP.' : 'Send a PNG, JPEG or WebP photo.' });
-  for (let i = 1; i < n; i++) {
-    const r = measureLimit.check(clientIp(req));
-    if (!r.ok) { res.set('Retry-After', String(r.retryAfterS)); return res.status(429).json({ ok: false, error: 'That’s a lot of photos in a few minutes. Give it about 10 minutes and try again.', ask: 'That’s a lot of photos in a few minutes. Give it about 10 minutes and try again.', retry: false, rateLimited: true }); }
+  const ip = clientIp(req);
+  const fresh = photosSeen.unseen(ip, urls);
+  for (let i = 0; i < fresh; i++) {
+    const r = measureLimit.check(ip);
+    if (!r.ok) { res.set('Retry-After', String(r.retryAfterS)); return res.status(429).json({ ok: false, error: LIMIT_MSG, ask: LIMIT_MSG, retry: false, rateLimited: true }); }
   }
   next();
 };
@@ -293,7 +298,7 @@ const testDeps = () => (process.env.NODE_ENV === 'test' || !hasKey() ? _testDeps
 // Up to 12 Meta calls per photo: read, 3 SAM outlines, check and wording, then one correction round (SAM
 // again, possibly twice, check and wording again). Every HTTP attempt is counted as it happens.
 export const CALLS_PER_PHOTO = 12;
-app.post('/api/measure', measureLimit, extraPhotosLimit, metaBudgetGate((req) => CALLS_PER_PHOTO * Math.max(1, photosOf(req.body).length), live), async (req, res) => {
+app.post('/api/measure', photosLimit, metaBudgetGate((req) => CALLS_PER_PHOTO * Math.max(1, photosOf(req.body).length), live), async (req, res) => {
   const { text = '', exifB64 = '' } = req.body || {};
   const dataUrls = photosOf(req.body);
   const dataUrl = dataUrls[0];

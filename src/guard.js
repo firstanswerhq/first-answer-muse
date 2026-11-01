@@ -65,6 +65,33 @@ export function metaBudgetGate(need = 1, isLive = () => true) {
   };
 }
 
+// Which photos an IP has sent in the last window, by content (sha1 of the data URL), so a floor
+// conversation that re-sends its earlier photos with each new one is charged once per photo, not once
+// per re-send. At most `cap` hashes are kept per IP (the oldest go first); photos beyond that count again.
+export function photoLedger({ windowMs = 10 * 60 * 1000, cap = 64 } = {}) {
+  const byIp = new Map(); // ip -> Map(hash -> last seen)
+  const hash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex');
+  return {
+    hash,
+    // Marks these photos seen and returns how many were new to this IP in the window.
+    unseen(ip, dataUrls, now = Date.now()) {
+      let m = byIp.get(ip);
+      if (!m) { m = new Map(); byIp.set(ip, m); }
+      for (const [h, t] of m) if (now - t >= windowMs) m.delete(h);
+      let fresh = 0;
+      for (const u of dataUrls) {
+        const h = hash(u);
+        if (!m.has(h)) fresh++;
+        m.delete(h); m.set(h, now); // most recent last
+        while (m.size > cap) m.delete(m.keys().next().value);
+      }
+      if (byIp.size > 5000) for (const [k, v] of byIp) if (![...v.values()].some((t) => now - t < windowMs)) byIp.delete(k);
+      return fresh;
+    },
+    reset() { byIp.clear(); },
+  };
+}
+
 export function rateLimiter({ max = 20, windowMs = 10 * 60 * 1000, message } = {}) {
   const hits = new Map(); // ip -> [timestamps]
   const msg = message || `That's a lot of photos in a few minutes. Give it about ${Math.round(windowMs / 60000)} minutes and try again.`;

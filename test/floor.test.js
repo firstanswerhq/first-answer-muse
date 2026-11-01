@@ -435,14 +435,27 @@ test('/api/measure: one photo still works the old way; five photos are refused; 
   const bad = await post({ dataUrls: [TINY, 'not-an-image'], text: 'tile' });
   assert.equal(bad.status, 400);
   assert.match((await bad.json()).ask, /Every photo/);
-  // Four photos in one request use four of the 20 per 10 minutes; a malformed request uses one (refused first).
-  srv.measureLimit.reset();
-  await post({ dataUrls: Array(4).fill(TINY), text: 'tile' }, { 'x-forwarded-for': '9.9.9.9' });
-  assert.equal(srv.measureLimit.check('9.9.9.9').remaining, 20 - 4 - 1);
-  srv.measureLimit.reset();
-  await post({ dataUrls: [TINY, 'nope', TINY, TINY], text: 'tile' }, { 'x-forwarded-for': '9.9.9.9' });
-  assert.equal(srv.measureLimit.check('9.9.9.9').remaining, 20 - 1 - 1);
-  srv.measureLimit.reset();
+  // Four different photos in one request use four of the 20 per 10 minutes; a malformed request uses none (refused first).
+  const ip = { 'x-forwarded-for': '9.9.9.9' };
+  const fresh = () => { srv.measureLimit.reset(); srv.photosSeen.reset(); };
+  const left = () => { const r = srv.measureLimit.check('9.9.9.9'); return r.remaining + 1; }; // check() itself takes one
+  const P = [1, 2, 3, 4, 5].map((i) => `${TINY}${i}`);
+  fresh();
+  await post({ dataUrls: P.slice(0, 4), text: 'tile' }, ip);
+  assert.equal(left(), 20 - 4);
+  fresh();
+  await post({ dataUrls: [P[0], 'nope', P[1], P[2]], text: 'tile' }, ip);
+  assert.equal(left(), 20);
+  // A floor conversation: photo 1, then 1+2, then 1+2+3, then 1+2+3+4 cost 4 in all; re-sending the same
+  // set costs nothing new; one more new photo costs 1.
+  fresh();
+  for (let n = 1; n <= 4; n++) await post(n === 1 ? { dataUrl: P[0], text: 'tile' } : { dataUrls: P.slice(0, n), text: 'tile' }, ip);
+  assert.equal(left(), 20 - 4);
+  await post({ dataUrls: P.slice(0, 4), text: 'tile' }, ip);
+  assert.equal(left(), 20 - 4 - 1); // the check above took one; the re-send took none
+  await post({ dataUrls: [P[1], P[2], P[3], P[4]], text: 'tile' }, ip);
+  assert.equal(left(), 20 - 4 - 1 - 1 - 1); // two checks so far, one new photo
+  fresh();
 });
 
 test('a chip can list several photos: tile.jpg, tile-2.jpg ... are one sample, in order', async () => {

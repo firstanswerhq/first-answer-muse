@@ -7,7 +7,7 @@ import http from 'node:http';
 delete process.env.MODEL_API_KEY;
 process.env.DIAG_TOKEN = 'diag-secret-for-tests';
 process.env.OWNER_TOKEN = 'owner-secret-for-tests';
-const { app, measureLimit, photoLimit } = await import('../src/server.js');
+const { app, measureLimit, photoLimit, photosSeen } = await import('../src/server.js');
 const engine = await import('../src/engine.js');
 const { clientIp, rateLimiter, tokenOk, redactSnapshot, redactLead, scrub, dailyCap, metaCalls } = await import('../src/guard.js');
 
@@ -17,7 +17,9 @@ const base = `http://127.0.0.1:${server.address().port}`;
 test.after(() => server.close());
 
 const tiny = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-const measure = (ip, extra = {}) => fetch(`${base}/api/measure`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip, ...extra }, body: JSON.stringify({ dataUrl: tiny, text: 'how big' }) });
+// Each call sends a different photo (a photo already seen from the same IP in the window is not charged again).
+let nth = 0;
+const measure = (ip, extra = {}) => fetch(`${base}/api/measure`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-forwarded-for': ip, ...extra }, body: JSON.stringify({ dataUrl: `${tiny}${nth++}`, text: 'how big' }) });
 
 test('client IP: the RIGHTMOST x-forwarded-for, then req.ip; Cloudflare headers only when TRUST_CLOUDFLARE=1', () => {
   // By default a caller-written cf-connecting-ip / true-client-ip is ignored.
@@ -32,7 +34,7 @@ test('client IP: the RIGHTMOST x-forwarded-for, then req.ip; Cloudflare headers 
 });
 
 test('/api/measure: 20 photos per 10 minutes per IP, then a friendly 429', async () => {
-  measureLimit.reset();
+  measureLimit.reset(); photosSeen.reset();
   for (let i = 0; i < 20; i++) assert.notEqual((await measure('9.9.9.9')).status, 429, `request ${i + 1}`);
   const r = await measure('9.9.9.9');
   assert.equal(r.status, 429);
