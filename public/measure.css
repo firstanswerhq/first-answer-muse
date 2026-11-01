@@ -232,6 +232,11 @@ body {
 .m-retry:disabled { opacity: .45; cursor: default; }
 
 /* how it was measured */
+/* A photo the server could not use: dimmed, with a badge. The drop notice sits right under the answer. */
+.shot.dropped img { filter: grayscale(.8) brightness(.45); }
+.shot.dropped svg, .shot.dropped .pin { opacity: .35; }
+.shot .shot-drop { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font: 700 12px/1 var(--body); padding: 6px 10px; border-radius: 8px; background: rgba(255, 138, 138, .92); color: #2a0000; pointer-events: none; }
+.r-drop { margin: 8px 0 0; padding: 8px 10px; border-left: 3px solid #ff8a8a; background: rgba(255, 138, 138, .08); font-size: 13px; line-height: 1.45; color: #ffd0d0; border-radius: 0 8px 8px 0; }
 /* The floor conversation: photos in so far, the next sample photo, Start over. */
 .r-next { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 0; padding: 9px 12px; border: 1px dashed var(--edge-hi); border-radius: 12px; font-size: 12.5px; color: #c4d3ea; }
 .r-next span { flex: 1 1 100%; }

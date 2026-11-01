@@ -287,14 +287,14 @@ function annotatedShot(dataUrl, overlay, T = UI.en) {
 
 // The key under the photo: these are Meta SAM 3.1's real masks (with its confidence), and what Muse
 // Spark said when it checked them.
-function shotKey(r) {
+function shotKey(r, { verdict = true } = {}) {
   const outlines = r.overlay?.outlines || [];
   if (!outlines.length) return null;
   const el = document.createElement('div');
   el.className = 'shot-key';
   const T = L(r);
   const item = (o) => `<span class="k ${o.role === 'ruler' ? 'ruler' : o.role === 'rejected' ? 'rejected' : 'target'}"><i></i>${esc(o.role === 'ruler' ? `${T.ruler}: ${o.label}` : o.label)}${o.conf != null && o.role !== 'rejected' ? ` <em>${Number(o.conf).toFixed(2)}</em>` : ''}</span>`;
-  const check = r.corrected && r.checked === 'agreed' ? ['ok', T.corrected] : { agreed: ['ok', T.agreed], disagreed: ['bad', r.corrected ? T.correctedBad : T.disagreed], skipped: ['skip', T.skipped] }[r.checked];
+  const check = !verdict ? null : r.corrected && r.checked === 'agreed' ? ['ok', T.corrected] : { agreed: ['ok', T.agreed], disagreed: ['bad', r.corrected ? T.correctedBad : T.disagreed], skipped: ['skip', T.skipped] }[r.checked];
   el.innerHTML = `<div class="k-row"><span class="mtag sam">SAM 3.1 masks</span>${outlines.map(item).join('')}</div>${check ? `<div class="k-check ${check[0]}"><span class="mtag spark">Muse Spark</span>${esc(check[1])}</div>` : ''}`;
   return el;
 }
@@ -309,7 +309,7 @@ const UI = {
     priced: (to) => `Demo price from ${to}’s own price list (a demo business).`, unpriced: (to) => `Not on ${to}’s price list, so the owner prices it.`, never: 'First Answer never makes prices up.', ownerEnglish: '',
     phone: 'Your phone (optional)', phoneLabel: 'Your phone number, optional, so they can text you back', send: (to) => `Send this to ${to}`, sending: 'Sending…', seeBoard: (o) => `See ${o}’s board`, sendFail: 'Couldn’t send it just now. Try again in a moment.',
     panel: 'How Meta’s models measured it', fixed: ['corrected SAM’s outline →', 'outlined it again → re-measured'], photo: 'Photo',
-    photosIn: (n) => `${n} photo${n === 1 ? '' : 's'} of this floor so far.`, noPhotos: 'No usable photo of this floor yet.', nextPhoto: 'Tap the camera for the next one; it joins these.', nextSample: 'Send the next sample photo', startOver: 'Start over', startedOver: 'Started over: the next photo begins a new floor.',
+    photosIn: (n) => `${n} photo${n === 1 ? '' : 's'} of this floor so far.`, noPhotos: 'No usable photo of this floor yet.', nextPhoto: 'Tap the camera for the next one; it joins these.', nextSample: 'Send the next sample photo', startOver: 'Start over', startedOver: 'Started over: the next photo begins a new floor.', notUsed: 'not used', atLimit: 'That’s the limit of 4 photos; tap Send to the business, or Start over.',
     conf: { good: 'Measured', fair: 'Close estimate', low: 'Rough — see tip' },
   },
   es: {
@@ -320,7 +320,7 @@ const UI = {
     priced: (to) => `Precio de demostración de la lista de ${to} (un negocio de demostración).`, unpriced: (to) => `No está en la lista de precios de ${to}; el dueño le pone precio.`, never: 'First Answer nunca inventa precios.', ownerEnglish: 'El negocio lo recibe en inglés.',
     phone: 'Tu teléfono (opcional)', phoneLabel: 'Tu número de teléfono, opcional, para que te escriban', send: (to) => `Enviar a ${to}`, sending: 'Enviando…', seeBoard: (o) => `Ver el tablero de ${o}`, sendFail: 'No se pudo enviar. Inténtalo de nuevo en un momento.',
     panel: 'Cómo lo midieron los modelos de Meta', fixed: ['corrigió el contorno de SAM →', 'lo marcó otra vez → medido de nuevo'], photo: 'Foto',
-    photosIn: (n) => `${n} foto${n === 1 ? '' : 's'} de este piso por ahora.`, noPhotos: 'Todavía no hay una foto útil de este piso.', nextPhoto: 'Toca la cámara para la siguiente; se suma a estas.', nextSample: 'Mandar la siguiente foto de muestra', startOver: 'Empezar de nuevo', startedOver: 'Empezamos de nuevo: la siguiente foto empieza otro piso.',
+    photosIn: (n) => `${n} foto${n === 1 ? '' : 's'} de este piso por ahora.`, noPhotos: 'Todavía no hay una foto útil de este piso.', nextPhoto: 'Toca la cámara para la siguiente; se suma a estas.', nextSample: 'Mandar la siguiente foto de muestra', startOver: 'Empezar de nuevo', startedOver: 'Empezamos de nuevo: la siguiente foto empieza otro piso.', notUsed: 'no se usó', atLimit: 'Ese es el límite de 4 fotos; toca Enviar al negocio, o Empezar de nuevo.',
     conf: { good: 'Medido', fair: 'Estimado cercano', low: 'Aproximado: ve el consejo' },
   },
 };
@@ -335,8 +335,13 @@ function list(items, ordered) {
 function renderReply(r, dataUrl, dataUrls = [dataUrl]) {
   const el = bubble('them', '', 'reply');
   const hasOverlay = r.overlay?.frame && ((r.overlay.outlines || []).length || (r.overlay.lines || []).length);
+  const dropped = new Set(r.dropped || []);
+  // A photo the server could not use (no sheet, sheet too small) is shown dimmed with a "not used" badge.
+  const markDropped = (shot, k) => { if (!dropped.has(k)) return; shot.classList.add('dropped'); const d = document.createElement('span'); d.className = 'shot-drop'; d.textContent = L(r).notUsed; shot.appendChild(d); };
   if (hasOverlay) {
-    el.appendChild(annotatedShot(dataUrl, r.overlay, L(r)));
+    const main = annotatedShot(dataUrl, r.overlay, L(r));
+    markDropped(main, 1);
+    el.appendChild(main);
     // A floor from several photos: the other photos, small, each with SAM's masks for that photo.
     const more = (r.overlays || []).slice(1).filter((o, i) => o?.frame && dataUrls[i + 1]);
     if (more.length) {
@@ -348,11 +353,13 @@ function renderReply(r, dataUrl, dataUrls = [dataUrl]) {
         n.className = 'shot-n';
         n.textContent = `${L(r).photo} ${o.photo || i + 2}`;
         shot.appendChild(n);
+        markDropped(shot, o.photo || i + 2);
         row.appendChild(shot);
       });
       el.appendChild(row);
     }
-    const key = shotKey(r);
+    // Spark's verdict is about the photos it checked; a dropped photo 1 was never checked.
+    const key = shotKey(r, { verdict: !dropped.has(1) });
     if (key) el.appendChild(key);
   }
 
@@ -372,6 +379,7 @@ function renderReply(r, dataUrl, dataUrls = [dataUrl]) {
   }
   if (r.answer && r.ok !== false) {
     html += `<p class="r-answer"${r.language === 'es' ? ' lang="es"' : ''}>${esc(r.answer).replace(/\n/g, '<br>')}</p>`;
+    if (r.asks?.length) html += `<p class="r-drop">${r.asks.map(esc).join('<br>')}</p>`;
     // "en español" only when the server found Spark's text really is Spanish.
     html += `<p class="r-src">${r.wording === 'spark' ? `<span class="mtag spark">${T.sparkWords}${r.language === 'es' ? ' · en español' : ''}</span> · ${T.checkedNums}` : `<span class="mtag math">${T.geomNums}</span>`}</p>`;
   }
@@ -379,7 +387,8 @@ function renderReply(r, dataUrl, dataUrls = [dataUrl]) {
   if (nums.length) html += `<div class="r-nums">${nums.map((n) => `<div class="r-num"><span>${esc(n.label)}</span><b>${esc(n.value)}</b></div>`).join('')}</div>`;
   if (shopping.length) html += `<div class="r-sec"><h4>${T.buy}</h4>${list(shopping, false)}</div>`;
   if (steps.length) html += `<div class="r-sec"><h4>${T.steps}</h4>${list(steps, true)}</div>`;
-  if (r.ask && r.ok !== false) html += `<div class="r-tip"><b>${T.tip}</b><span>${esc(r.ask)}</span></div>`;
+  const tip = r.asks?.length && r.ok !== false ? r.askTail : r.ask;
+  if (tip && r.ok !== false) html += `<div class="r-tip"><b>${T.tip}</b><span>${esc(tip)}</span></div>`;
   if (r.note) html += `<p class="r-note">${esc(r.note)}</p>`;
   const biz = r.business;
   if (biz && biz.job) {
@@ -398,7 +407,7 @@ function renderReply(r, dataUrl, dataUrls = [dataUrl]) {
   if (sendForm) sendForm.addEventListener('submit', (e) => { e.preventDefault(); sendToBusiness(r.handoff, sendForm, body.querySelector('.r-sent'), r.lang); });
   // A floor conversation: how many photos are in, the next sample photo (demo) and Start over.
   if (r.task === 'floor_tile' && (r.ok !== false || r.dropped)) {
-    const kept = (r.photos || (r.combined?.photos) || (r.ok !== false ? 1 : 0));
+    const kept = r.combined?.photos ?? r.photos ?? (r.ok !== false ? 1 : 0);
     const row = document.createElement('div');
     row.className = 'r-next';
     const more = kept < MAX_PHOTOS && (r.wantMore || r.dropped);
@@ -545,11 +554,12 @@ let busy = false;
 // the combined job to the business.
 let floorSet = []; // data URLs of this conversation's floor photos, in order
 let floorText = '';
+let floorLang = 'en';
 let pendingSamples = []; // the Tile floor chip's remaining sample photos (URLs), sent one at a time
-function resetFloor() { floorSet = []; floorText = ''; pendingSamples = []; }
+function resetFloor() { floorSet = []; floorText = ''; floorLang = 'en'; pendingSamples = []; }
 
 // blobs: the new photo(s). In a floor conversation the earlier floor photos go along with them.
-async function send(blobs, text, { again = false, extraUrls = null } = {}) {
+async function send(blobs, text, { again = false, extraUrls = null, join = null } = {}) {
   if (busy) return;
   blobs = Array.isArray(blobs) ? blobs : [blobs];
   busy = true;
@@ -558,7 +568,7 @@ async function send(blobs, text, { again = false, extraUrls = null } = {}) {
   try {
     const [fresh, exifB64] = await Promise.all([Promise.all(blobs.map((b) => toDataUrl(b))), headB64(blobs[0]).catch(() => null)]);
     // Earlier floor photos first, then the new ones (at most 4 in all).
-    const earlier = extraUrls || (floorSet.length && (floorMode() || FLOOR_WORDS.test(text)) ? floorSet : []);
+    const earlier = extraUrls || ((join ?? (floorSet.length && (floorMode() || FLOOR_WORDS.test(text)))) ? floorSet : []);
     const dataUrls = [...earlier, ...fresh].slice(0, MAX_PHOTOS);
     const dataUrl = dataUrls[0];
     if (!again) {
@@ -581,6 +591,7 @@ async function send(blobs, text, { again = false, extraUrls = null } = {}) {
       const dropped = new Set(r.dropped || []);
       floorSet = dataUrls.filter((_, i) => !dropped.has(i + 1));
       floorText = text;
+      floorLang = r.lang === 'es' ? 'es' : 'en';
     } else if (r && r.task && r.task !== 'floor_tile') resetFloor();
   } catch {
     errorBubble({ ask: FALLBACK_ERR, retry: true }, () => send(blobs, text, { again: true, extraUrls: earlier }));
@@ -601,11 +612,21 @@ $('compose').addEventListener('submit', (e) => {
     return;
   }
   const blobs = staged.map((s) => s.blob);
-  if (!floorMode() && !FLOOR_WORDS.test(text)) resetFloor();
+  // In a floor conversation a new camera photo joins the floor unless the message clearly asks for another
+  // task (the server's read of the photo is the real decision; a non-floor answer resets the set).
+  const join = floorSet.length > 0 && (floorMode() || !text || !OTHER_TASK_WORDS.test(text));
+  if (!join) resetFloor();
   textIn.value = '';
   unstage();
-  send(blobs, text);
+  if (join && floorSet.length >= MAX_PHOTOS) {
+    // At the limit nothing is posted (the same four would just be measured again).
+    bubble('me', `<img src="${URL.createObjectURL(blobs[0])}" alt="Photo">`, 'photo');
+    bubble('them', esc(L({ lang: floorLang }).atLimit));
+    return;
+  }
+  send(blobs, text, { join });
 });
+const OTHER_TASK_WORDS = /\b(?:driveway|patio|sealer|seal|concrete|asphalt|walkway|slab|shoe|windshield|chip|crack|glass|shed|fence|gap|how tall|height|how far|distance|face|eyes?|pd|zapato|parabrisas|entrada|cobertizo|cerca)\b/i;
 
 // ---------- sample chips ----------
 let serverSamples = [];
