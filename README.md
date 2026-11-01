@@ -216,7 +216,7 @@ Every commit in this repository is from the hackathon window; the first is Oct 2
 | Nov 1 | The floor as a conversation: one photo gives "so far" and asks for more, each later photo is combined, bad photos are dropped and asked for again, "Send the next sample photo" and "Start over" on the page | `c73c559`, `c2b7805`, `d2361ff`, `7d386b1` |
 | Nov 1 | Sample photos: the bathroom from its two ends, a windshield chip, a side yard, a driveway (AI-generated demo images) | `9fe3aa2` |
 | Nov 1 | Review D fixes: a camera photo sent with nothing typed joins the floor; the 5th photo is stopped on the page; dropped photos badged and named under the answer; each distinct photo counts once per 10 minutes against the per-IP limit; Playwright page test; README | `749fcfe`, `a019ae2`, `a5bb9a9`, `37e2bdd` (and one hash-only commit) |
-| Nov 1 | After the first live run: fill bands (a floor with fixtures combines with the open floor as the tile area; under 55% refused), a 40% pairwise-overlap alignment check, a shared two-at-a-time budget for Spark's checks, the partial as the fallback after a refused combine, Spark's wording token budget raised and an honest panel line when it returns no text | `live-fixes commits` |
+| Nov 1 | After the first live run: fill bands (a floor with fixtures combines with the open floor as the tile area; under 55% refused), a 40% pairwise-overlap alignment check, a shared two-at-a-time budget for Spark's checks, the partial as the fallback after a refused combine, Spark's wording token budget raised and an honest panel line when it returns no text | `d0ce8dd` (and one hash-only commit) |
 
 See `git log` for the full history.
 
