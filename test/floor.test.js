@@ -286,7 +286,7 @@ const post = (body, headers = {}) => fetch(`${base}/api/measure`, { method: 'POS
 test('/api/measure takes two photos and streams one progress line per photo, then a combined result the board can take', async () => {
   const { segs } = scene(POSES.slice(0, 2));
   const urls = [`${TINY}1`, `${TINY}2`]; // two distinct, still image data URLs
-  srv.measureDeps.current = { read: async () => R({}), segment: async (d, c) => segs[urls.indexOf(d)]?.[c] || EMPTY };
+  srv._testDeps.current = { read: async () => R({}), segment: async (d, c) => segs[urls.indexOf(d)]?.[c] || EMPTY };
   try {
     const res = await post({ dataUrls: urls, text: 'how much tile? paper on the floor', photos: 2 });
     assert.match(res.headers.get('content-type'), /ndjson/);
@@ -315,8 +315,15 @@ test('/api/measure takes two photos and streams one progress line per photo, the
     assert.equal(lead.sight.task, 'floor_tile');
     assert.ok(lead.quote.total >= 600);
   } finally {
-    srv.measureDeps.current = null;
+    srv._testDeps.current = null;
   }
+});
+
+test('a body too big for four photos gets a plain JSON answer, not an HTML error page', async () => {
+  const res = await fetch(`${base}/api/measure`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: `{"dataUrls":["${'x'.repeat(17 * 1024 * 1024)}"]}` });
+  assert.equal(res.status, 413);
+  assert.match(res.headers.get('content-type'), /json/);
+  assert.match((await res.json()).ask, /too big to send together/);
 });
 
 test('/api/measure: one photo still works the old way; five photos are refused; every photo counts against the limit', async () => {
@@ -331,10 +338,13 @@ test('/api/measure: one photo still works the old way; five photos are refused; 
   const bad = await post({ dataUrls: [TINY, 'not-an-image'], text: 'tile' });
   assert.equal(bad.status, 400);
   assert.match((await bad.json()).ask, /Every photo/);
-  // Four photos in one request use four of the 20 per 10 minutes.
+  // Four photos in one request use four of the 20 per 10 minutes; a malformed request uses one (refused first).
   srv.measureLimit.reset();
   await post({ dataUrls: Array(4).fill(TINY), text: 'tile' }, { 'x-forwarded-for': '9.9.9.9' });
   assert.equal(srv.measureLimit.check('9.9.9.9').remaining, 20 - 4 - 1);
+  srv.measureLimit.reset();
+  await post({ dataUrls: [TINY, 'nope', TINY, TINY], text: 'tile' }, { 'x-forwarded-for': '9.9.9.9' });
+  assert.equal(srv.measureLimit.check('9.9.9.9').remaining, 20 - 1 - 1);
   srv.measureLimit.reset();
 });
 

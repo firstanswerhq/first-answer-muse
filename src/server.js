@@ -24,6 +24,12 @@ import { hasKey, transcribeWav, openRealtimeTranscription, SPARK, BASE_URL, DIRE
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const app = express();
 app.use(express.json({ limit: '16mb' })); // up to 4 photos of a floor at 1600 px, base64
+// A body that is too big or not JSON gets a plain JSON answer, never Express's HTML page with a stack trace.
+app.use((err, req, res, next) => {
+  if (err?.type === 'entity.too.large') return res.status(413).json({ ok: false, retry: false, ask: 'Those photos are too big to send together; try fewer at once.' });
+  if (err?.type === 'entity.parse.failed' || err?.status === 400) return res.status(400).json({ ok: false, retry: false, ask: 'Couldn’t read that request.' });
+  next(err);
+});
 app.use(express.static(path.join(__dirname, '..', 'public')));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 32 * 1024 * 1024 } });
 
@@ -265,10 +271,13 @@ export function photosOf(body) {
   const urls = list.length ? list : body?.dataUrl ? [body.dataUrl] : [];
   return urls.map((u) => (typeof u === 'string' ? u : ''));
 }
-// Every photo counts against the per-IP limit (the first was counted by measureLimit already).
+// Every photo counts against the per-IP limit (the first was counted by measureLimit already). A request
+// that is not even photos is refused before it costs anything.
 const extraPhotosLimit = (req, res, next) => {
-  const n = photosOf(req.body).length;
+  const urls = photosOf(req.body);
+  const n = urls.length;
   if (n > MAX_PHOTOS) return res.status(400).json({ ok: false, ask: `Send up to ${MAX_PHOTOS} photos of the floor.` });
+  if (!n || !urls.every((u) => IMAGE_URL.test(u))) return res.status(400).json({ ok: false, ask: n > 1 ? 'Every photo must be a PNG, JPEG or WebP.' : 'Send a PNG, JPEG or WebP photo.' });
   for (let i = 1; i < n; i++) {
     const r = measureLimit.check(clientIp(req));
     if (!r.ok) { res.set('Retry-After', String(r.retryAfterS)); return res.status(429).json({ ok: false, error: 'That’s a lot of photos in a few minutes. Give it about 10 minutes and try again.', ask: 'That’s a lot of photos in a few minutes. Give it about 10 minutes and try again.', retry: false, rateLimited: true }); }
@@ -277,8 +286,9 @@ const extraPhotosLimit = (req, res, next) => {
 };
 
 // Stand-in models for the server tests (test/floor.test.js): a deps object as measureAnything takes it.
-// null in production, where the real Meta models are used.
-export const measureDeps = { current: null };
+// Only honored when NODE_ENV is 'test' or no Meta key is set; with a key, the real models are always used.
+export const _testDeps = { current: null };
+const testDeps = () => (process.env.NODE_ENV === 'test' || !hasKey() ? _testDeps.current : null);
 
 // Up to 12 Meta calls per photo: read, 3 SAM outlines, check and wording, then one correction round (SAM
 // again, possibly twice, check and wording again). Every HTTP attempt is counted as it happens.
@@ -300,7 +310,7 @@ app.post('/api/measure', measureLimit, extraPhotosLimit, metaBudgetGate((req) =>
     line({ type: 'start' });
   }
   try {
-    const r = await measureAnything({ dataUrl, dataUrls: dataUrls.length > 1 ? dataUrls : null, text: String(text).slice(0, 500), focal35, deps: measureDeps.current, onStep: stream ? (s) => line({ type: 'step', ...progressStep(s) }) : null });
+    const r = await measureAnything({ dataUrl, dataUrls: dataUrls.length > 1 ? dataUrls : null, text: String(text).slice(0, 500), focal35, deps: testDeps(), onStep: stream ? (s) => line({ type: 'step', ...progressStep(s) }) : null });
     broadcast('measure', { task: r.task, ok: r.ok, headline: r.headline });
     const handoff = rememberHandoff(r);
     const { thumb, ...rest } = r; // the owner board's copy of the photo stays on the server
