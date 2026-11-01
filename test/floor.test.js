@@ -348,6 +348,20 @@ test('/api/measure: one photo still works the old way; five photos are refused; 
   srv.measureLimit.reset();
 });
 
+test('a chip can list several photos: tile.jpg, tile-2.jpg ... are one sample, in order', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'samples-'));
+  for (const f of ['tile-2.jpg', 'tile.jpg', 'tile-10.jpg', 'driveway.jpg']) fs.writeFileSync(path.join(dir, f), 'x');
+  fs.writeFileSync(path.join(dir, 'tile.txt'), 'Tile floor\nhow much tile? two photos, paper on the floor');
+  const list = srv.listSamples(dir);
+  assert.deepEqual(list.map((x) => x.id), ['driveway', 'tile']);
+  const tile = list.find((x) => x.id === 'tile');
+  assert.deepEqual(tile.urls, ['/samples/tile.jpg', '/samples/tile-2.jpg', '/samples/tile-10.jpg']);
+  assert.equal(tile.url, '/samples/tile.jpg');
+  assert.equal(tile.label, 'Tile floor');
+  assert.deepEqual(list.find((x) => x.id === 'driveway').urls, ['/samples/driveway.jpg']);
+});
+
 test('/api/measure reserves 12 Meta calls per photo against the daily cap', async () => {
   process.env.MODEL_API_KEY = 'test-not-a-real-key';
   try {

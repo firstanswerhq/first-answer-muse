@@ -583,20 +583,22 @@ function renderChips() {
       const text = srv?.text || s.text;
       if (srv?.url) {
         if (busy) return;
-        const res = await fetch(srv.url).catch(() => null);
-        if (!res?.ok) { textIn.value = text; textIn.focus(); return; }
-        const blob = await res.blob();
+        // A chip may have several photos (tile.jpg, tile-2.jpg ...): all of them, in order.
+        const urls = Array.isArray(srv.urls) && srv.urls.length ? srv.urls.slice(0, MAX_PHOTOS) : [srv.url];
+        const blobs = [];
+        for (const u of urls) { const res = await fetch(u).catch(() => null); if (res?.ok) blobs.push(await res.blob()); }
+        if (!blobs.length) { textIn.value = text; textIn.focus(); return; }
         unstage();
         if (s.id === 'tile') {
-          // The floor chip stages its photo instead of sending it, so more photos of the same floor can
+          // The floor chip stages its photos instead of sending them, so more photos of the same floor can
           // be added ("Add another photo of the same floor") before Send.
           floorChip = true;
           textIn.value = text;
-          stage(blob);
+          blobs.forEach((bl, i) => stage(bl, { add: i > 0 }));
           return;
         }
         textIn.value = '';
-        send(blob, text);
+        send(blobs[0], text);
       } else {
         floorChip = s.id === 'tile';
         textIn.value = text;

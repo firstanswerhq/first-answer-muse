@@ -123,7 +123,7 @@ test('sample photos are listed by URL (served as static files), not inlined as b
   fs.writeFileSync(path.join(dir, 'driveway.txt'), 'Driveway\nHow big is my driveway? I need sealer.');
   fs.writeFileSync(path.join(dir, 'notes.md'), 'ignored');
   const list = listSamples(dir);
-  assert.deepEqual(list, [{ id: 'driveway', label: 'Driveway', text: 'How big is my driveway? I need sealer.', url: '/samples/driveway.jpg' }]);
+  assert.deepEqual(list, [{ id: 'driveway', label: 'Driveway', text: 'How big is my driveway? I need sealer.', url: '/samples/driveway.jpg', urls: ['/samples/driveway.jpg'] }]);
   assert.deepEqual(listSamples(path.join(dir, 'missing')), []);
   const r = await (await fetch(`${base}/api/measure/samples`)).json();
   assert.ok(Array.isArray(r));

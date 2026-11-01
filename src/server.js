@@ -328,13 +328,23 @@ app.post('/api/measure', measureLimit, extraPhotosLimit, metaBudgetGate((req) =>
 // (first line: chip label, the rest: the message sent with the photo). Only the list comes from here;
 // the photos are plain static files under /samples/, fetched when a chip is tapped.
 export const SAMPLES_DIR = path.join(__dirname, '..', 'public', 'samples');
+// A chip can have several photos: <id>.jpg, <id>-2.jpg, <id>-3.jpg ... are one sample (a floor from several
+// doorways); `urls` lists them in order and `url` is the first, as before.
 export function listSamples(dir = SAMPLES_DIR) {
   try {
-    return fs.readdirSync(dir).filter((f) => /^[\w-]+\.(jpe?g|png|webp)$/i.test(f) && (faceEnabled() || !/^face\./i.test(f))).sort().map((f) => {
-      const id = f.replace(/\.\w+$/, '');
+    const files = fs.readdirSync(dir).filter((f) => /^[a-z0-9_]+(?:-\d+)?\.(jpe?g|png|webp)$/i.test(f) && (faceEnabled() || !/^face\b/i.test(f))).sort();
+    const byId = new Map();
+    for (const f of files) {
+      const m = f.match(/^([a-z0-9_]+)(?:-(\d+))?\.\w+$/i);
+      const id = m[1], n = m[2] ? Number(m[2]) : 1;
+      if (!byId.has(id)) byId.set(id, []);
+      byId.get(id).push({ n, url: `/samples/${encodeURIComponent(f)}` });
+    }
+    return [...byId.entries()].map(([id, list]) => {
+      const urls = list.sort((a, b) => a.n - b.n).map((x) => x.url);
       const txtFile = path.join(dir, `${id}.txt`);
       const [label, ...rest] = (fs.existsSync(txtFile) ? fs.readFileSync(txtFile, 'utf8') : id).split(/\r?\n/);
-      return { id, label: label.trim(), text: rest.join('\n').trim(), url: `/samples/${encodeURIComponent(f)}` };
+      return { id, label: label.trim(), text: rest.join('\n').trim(), url: urls[0], urls };
     });
   } catch {
     return [];
