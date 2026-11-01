@@ -19,6 +19,7 @@ const RULER = {
 };
 const noun = (n) => NOUN[String(n).replace(/^(?:the|a|an) /i, '').toLowerCase()] || `“${String(n).replace(/^(?:the|a|an) /i, '')}”`;
 const bare = (n) => noun(n).replace(/^(?:el|la|los|las) /, '');
+const whole = (n) => (/^la /.test(noun(n)) ? 'completa' : 'completo'); // "la hoja completa", "el piso completo"
 
 // Units next to numbers: "12 ft 2 in" -> "12 pies 2 pulg.", "420 sq ft" -> "420 pies cuadrados".
 export function units(s) {
@@ -46,7 +47,7 @@ const EXACT = {
   Area: 'Área', Range: 'Rango', Size: 'Tamaño', 'Concrete sealer': 'Sellador para concreto', 'Asphalt sealer': 'Sellador para asfalto',
   'Chip size': 'Tamaño del impacto', 'Crack length': 'Largo de la grieta', 'Repair limit': 'Límite para reparar',
   'Foot length': 'Largo del pie', 'US men’s': 'EE. UU. hombre', 'US women’s': 'EE. UU. mujer', EU: 'EU',
-  Narrowest: 'Lo más angosto', Typical: 'Normal', Needs: 'Necesita', Floor: 'Piso', 'Full tiles': 'Baldosas enteras', Buy: 'Comprar',
+  Narrowest: 'Lo más angosto', Typical: 'Normal', Needs: 'Necesita', Floor: 'Piso', 'Full tiles': 'Baldosas enteras', Buy: 'Comprar', Photos: 'Fotos',
   Length: 'Largo', Width: 'Ancho', 'Long side': 'Lado largo', 'Short side': 'Lado corto', Accuracy: 'Precisión', Height: 'Altura', Distance: 'Distancia',
   // values
   '1 in (a quarter)': '1 pulg. (una moneda de un cuarto de dólar)',
@@ -90,6 +91,8 @@ const PHRASES = [
   ['an edge cut is under 2 in; consider a different tile size or orientation', 'un corte de borde queda de menos de 2 pulg.; considera otro tamaño de baldosa u otra orientación'],
   ['It’s within measuring error of the repair limit, so have a shop look before deciding.', 'Está dentro del margen de error del límite para reparar; que lo revise un taller antes de decidir.'],
   ['Measured from one photo — check one wall with a tape before cutting.', 'Medido con una sola foto: revisa una pared con cinta antes de cortar.'],
+  ['Leave the sheet of paper where it is and shoot the floor from another doorway or corner.', 'Deja la hoja de papel donde está y toma el piso desde otra puerta u otra esquina.'],
+  ['Only the first photo was measured: several photos at once are for a floor, with the same sheet of paper in every shot.', 'Solo se midió la primera foto: varias fotos a la vez son para un piso, con la misma hoja de papel en todas.'],
   ['For an exact number, take the photo with a door in it, standing on the same ground.', 'Para un número exacto, toma la foto con una puerta parada en el mismo piso.'],
   ['For an exact number, include a door standing on the same ground.', 'Para un número exacto, incluye una puerta parada en el mismo piso.'],
   ['Measuring needs the Meta models switched on for this server.', 'Para medir, este servidor necesita los modelos de Meta encendidos.'],
@@ -127,15 +130,23 @@ const RULES = [
   [/^The gap is about (.+?), and (.+?) at the narrowest spot\.$/, (m) => `El espacio mide unos ${units(m[1])}, y ${units(m[2])} en la parte más angosta.`],
   [/^(.+) wide unit$/, (m) => `Unidad de ${units(m[1])} de ancho`],
   // tile
-  [/^The floor is about (.+?) by (.+?) \(([\d,.]+) sq ft\)\. In (.+?) × (.+?) in tile that’s (\d+) tiles laid, plus (\d+)% extra for cuts and mistakes: buy (\d+) tiles\.$/, (m) =>
-    `El piso mide unos ${units(m[1])} por ${units(m[2])} (${m[3]} pies cuadrados). Con baldosas de ${m[4]} × ${m[5]} pulg. son ${m[6]} baldosas colocadas, más ${m[7]}% extra para cortes y errores: compra ${m[8]} baldosas.`],
+  [/^The floor is about (.+?) by (.+?) \(([\d,.]+) sq ft\)(?:, combined from (\d+) photos on the paper’s plane)?\. In (.+?) × (.+?) in tile that’s (\d+) tiles laid, plus (\d+)% extra for cuts and mistakes: buy (\d+) tiles\.$/, (m) =>
+    `El piso mide unos ${units(m[1])} por ${units(m[2])} (${m[3]} pies cuadrados)${m[4] ? `, combinando ${m[4]} fotos sobre el plano de la hoja de papel` : ''}. Con baldosas de ${m[5]} × ${m[6]} pulg. son ${m[7]} baldosas colocadas, más ${m[8]}% extra para cortes y errores: compra ${m[9]} baldosas.`],
+  [/^(\d+) photos$/, (m) => `${m[1]} fotos`],
+  [/^Combined from (\d+) photos — check one wall with a tape before cutting\.$/, (m) => `Combinado de ${m[1]} fotos: revisa una pared con cinta antes de cortar.`],
+  [/^The photos weren’t combined: photo (\S+) doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved\. This answer is from photo (\d+) alone\. (.+)$/, (m) =>
+    `No se combinaron las fotos: la foto ${m[1]} no toca el piso que se ve en las otras, así que puede ser otro piso o la hoja se movió. Esta respuesta es solo de la foto ${m[2]}. ${es(m[3])}`],
+  [/^I couldn’t find the (.+?) in photo (\d+) of (\d+)\. (.+?) Retake that one with the whole (.+?) in the shot\.$/, (m) =>
+    `No encontré ${noun(m[1])} en la foto ${m[2]} de ${m[3]}. ${es(m[4])} Vuelve a tomar esa con ${noun(m[5])} ${whole(m[5])} en la foto.`],
+  [/^I couldn’t measure photo (\d+) of (\d+): (.+?)\. (.+?) Retake that one with the whole (.+?) in the shot\.$/, (m) =>
+    `No pude medir la foto ${m[1]} de ${m[2]}: ${es(m[3])}. ${es(m[4])} Vuelve a tomar esa con ${noun(m[5])} ${whole(m[5])} en la foto.`],
   [/^(\d+) tiles, (.+?) × (.+?) in \(same lot number on every box\)$/, (m) => `${m[1]} baldosas de ${m[2]} × ${m[3]} pulg. (mismo número de lote en todas las cajas)`],
   [/^Start at the center of the room: (.+) across, (.+) along\.$/, (m) => `Empieza en el centro del cuarto: ${tileAxis(m[1])} a lo ancho, ${tileAxis(m[2])} a lo largo.`],
   [/^(\d+) × (edge pieces along the two side walls|edge pieces along the two end walls|corner pieces): (.+)\.$/, (m) => `${m[1]} × ${{ 'edge pieces along the two side walls': 'piezas de borde junto a las dos paredes laterales', 'edge pieces along the two end walls': 'piezas de borde junto a las dos paredes de los extremos', 'corner pieces': 'piezas de esquina' }[m[2]]}: ${es(m[3])}.`],
   [/^cut each tile to (.+?) in (wide|long) \(trim (.+?) in\)$/, (m) => `corta cada baldosa a ${m[1]} pulg. de ${m[2] === 'wide' ? 'ancho' : 'largo'} (recorta ${m[3]} pulg.)`],
   // retake tips and refusals
   [/^Muse Spark says the coin looks like a (.+?), not a (.+?), so I didn’t measure\. If it is, send the photo again and say “it’s a (.+?)”\.$/, (m) => `Muse Spark dice que la moneda parece una ${RULER[m[1]] || m[1]}, no una ${RULER[m[2]] || m[2]}, así que no medí. Si es así, manda la foto otra vez y escribe “es un ${m[3]}”.`],
-  [/^I didn’t measure this one: Muse Spark checked SAM’s outline of (the thing to measure|the ruler|the other side) and saw (.+?), not (.+?)\. .*$/, (m) => `No lo medí: Muse Spark revisó el contorno de SAM ${{ 'the thing to measure': 'de lo que hay que medir', 'the ruler': 'de la referencia', 'the other side': 'del otro lado' }[m[1]]} y vio “${m[2]}”, no ${noun(m[3])}. Vuelve a tomar la foto con ${noun(m[3])} completo, enfocado y cerca del centro.`],
+  [/^I didn’t measure this one: (?:in photo (\d+) of (\d+), )?Muse Spark checked SAM’s outline of (the thing to measure|the ruler|the other side) and saw (.+?), not (.+?)\. .*$/, (m) => `No lo medí: ${m[1] ? `en la foto ${m[1]} de ${m[2]}, ` : ''}Muse Spark revisó el contorno de SAM ${{ 'the thing to measure': 'de lo que hay que medir', 'the ruler': 'de la referencia', 'the other side': 'del otro lado' }[m[3]]} y vio “${m[4]}”, no ${noun(m[5])}. Vuelve a tomar ${m[1] ? 'esa foto' : 'la foto'} con ${noun(m[5])} ${whole(m[5])}, ${whole(m[5]) === 'completa' ? 'enfocada' : 'enfocado'} y cerca del centro.`],
   [/^I didn’t measure this one: Muse Spark couldn’t confirm SAM’s second outline in time\. Retake it with (.+?) whole, in focus and near the middle of the shot\.$/, (m) => `No lo medí: Muse Spark no alcanzó a confirmar el segundo contorno de SAM. Vuelve a tomar la foto con ${noun(m[1])} completo, enfocado y cerca del centro.`],
   [/^I couldn’t find the (.+?) in that photo\. (.+)$/, (m) => `No encontré ${noun(m[1])} en esa foto. Vuelve a intentarlo más cerca, con ${noun(m[1])} en el centro de la foto.`],
   [/^I found the (.+?) but not the (.+?)\. Step back so both are in the shot\.$/, (m) => `Encontré ${noun(m[1])} pero no ${noun(m[2])}. Aléjate un poco para que salgan los dos.`],
@@ -193,12 +204,15 @@ export function localizeResult(r) {
   if (out.answer && out.wording !== 'spark') out.answer = es(out.answer);
   if (out.answerTemplate) out.answerTemplate = es(out.answerTemplate);
   if (out.ask) out.ask = es(out.ask);
+  if (out.note) out.note = es(out.note);
   if (out.measuredAgainst) out.measuredAgainst = esRuler(out.measuredAgainst);
   out.numbers = (out.numbers || []).map((n) => ({ label: es(n.label), value: es(n.value) }));
   out.shopping = (out.shopping || []).map(es);
   out.steps = (out.steps || []).map(es);
-  if (out.overlay) out.overlay = { ...out.overlay,
-    lines: (out.overlay.lines || []).map((l) => ({ ...l, label: l.label ? units(l.label) : l.label })),
-    outlines: (out.overlay.outlines || []).map((o) => ({ ...o, label: o.role === 'rejected' ? o.label.replace(/^SAM’s first try/, 'Primer intento de SAM') : (NOUN[o.label] ? bare(o.label) : RULER[o.label] || o.label) })) };
+  const overlay = (ov) => ({ ...ov,
+    lines: (ov.lines || []).map((l) => ({ ...l, label: l.label ? units(l.label) : l.label })),
+    outlines: (ov.outlines || []).map((o) => ({ ...o, label: o.role === 'rejected' ? o.label.replace(/^SAM’s first try/, 'Primer intento de SAM') : (NOUN[o.label] ? bare(o.label) : RULER[o.label] || o.label) })) });
+  if (out.overlay) out.overlay = overlay(out.overlay);
+  if (out.overlays) out.overlays = out.overlays.map(overlay);
   return out;
 }

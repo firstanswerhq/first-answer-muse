@@ -11,6 +11,7 @@ import { hasKey, sparkReadPhoto, samSegment, samSegmentAt, sparkWrite, sparkChec
 import { checkImagesAsync, COLOR_NAMES } from './overlay.js';
 import { DAILY_CAP_MESSAGE } from './guard.js';
 import { measureFlat, FLAT_REFERENCES, maskBoundary } from './flat.js';
+import { floorOnPaper, combineFloors, MAX_PHOTOS } from './floor.js';
 import { best, measureSurface, garageDoorKind, REFERENCES as SURFACE_REFERENCES } from './measure.js';
 import { calibrate, gapBetween, heightOf, distanceTo, contactPoints, fitCheck, ftIn, UPRIGHT } from './distance.js';
 import { plan as tilePlan } from './tiles.js';
@@ -272,7 +273,9 @@ function samResult(concepts, segs) {
 }
 
 /**
- * measureAnything({ dataUrl, text, focal35, deps, onStep })
+ * measureAnything({ dataUrl, dataUrls, text, focal35, deps, onStep })
+ *   dataUrls: 2 to 4 photos of ONE floor with the same sheet of paper in every shot (floor_tile only);
+ *             the first is also dataUrl. Any other task uses the first photo alone.
  *   deps (for tests): { read(dataUrl, prompt, schema) -> json, segment(dataUrl, concept) -> { objects, frame },
  *                       segmentAt?(dataUrl, frame, point) -> { objects, frame },
  *                       word?(system, facts) -> text, check?(images, prompt, schema) -> json }
@@ -284,8 +287,10 @@ export async function measureAnything(opts) {
   return r?.read?.language === 'es' ? localizeResult(r) : { ...r, lang: 'en' };
 }
 
-async function measureAll({ dataUrl, text = '', focal35 = null, deps = null, onStep = null, wordTimeoutMs = WORD_TIMEOUT_MS, checkTimeoutMs = CHECK_TIMEOUT_MS }) {
+async function measureAll({ dataUrl, dataUrls = null, text = '', focal35 = null, deps = null, onStep = null, wordTimeoutMs = WORD_TIMEOUT_MS, checkTimeoutMs = CHECK_TIMEOUT_MS }) {
   const pipeline = makePipeline(onStep);
+  const urls = Array.isArray(dataUrls) && dataUrls.length > 1 ? dataUrls.slice(0, MAX_PHOTOS) : null;
+  if (urls && !dataUrl) dataUrl = urls[0];
   const live = deps || (hasKey() ? {
     read: (d, p, s) => sparkReadPhoto({ dataUrl: d, prompt: p, schema: s }),
     segment: (d, c) => samSegment({ dataUrl: d, concept: c }),
@@ -294,21 +299,45 @@ async function measureAll({ dataUrl, text = '', focal35 = null, deps = null, onS
     check: (images, prompt, schema) => sparkCheck({ images, prompt, schema, timeoutMs: CHECK_TIMEOUT_MS }),
   } : null);
   const sam = { cache: new Map(), override: null };
-  const r = await measureCore({ dataUrl, text, focal35, live, pipeline, sam });
+  let r;
+  if (urls) {
+    // Several photos: Spark reads the first one; a floor goes to the multi-photo flow, anything else
+    // is measured from the first photo alone (and the answer says so).
+    const rd = await readTask({ dataUrl, text, live, pipeline });
+    if (rd.done) return rd.done;
+    if (rd.read.task === 'floor_tile') {
+      r = await floorMultiFlow({ dataUrls: urls, text, live, read: rd.read, pipeline, wordTimeoutMs, checkTimeoutMs });
+      if (!r.ok) return r;
+      return checkAndWord({ r, dataUrl, text, focal35, live, pipeline, sam, wordTimeoutMs, checkTimeoutMs });
+    }
+    r = await measureCore({ dataUrl, text, focal35, live, pipeline, sam, presetRead: rd.read });
+    if (r.ok) r.note = `Only the first photo was measured: several photos at once are for a floor, with the same sheet of paper in every shot.`;
+  } else {
+    r = await measureCore({ dataUrl, text, focal35, live, pipeline, sam });
+  }
   if (!r.ok) return r;
-  // Muse Spark checks SAM's outlines while it words the answer (in parallel, to save time). If it
-  // disagrees with what SAM outlined, no number goes out as it is.
-  const [chk] = await Promise.all([
-    live?.check && pipeline.check ? checkOutlines({ dataUrl, live, check: pipeline.check, pipeline, timeoutMs: checkTimeoutMs }) : null,
+  return checkAndWord({ r, dataUrl, text, focal35, live, pipeline, sam, wordTimeoutMs, checkTimeoutMs });
+}
+
+// Muse Spark checks SAM's outlines (every photo's, for a multi-photo floor) while it words the answer
+// (in parallel, to save time). If it disagrees with what SAM outlined, no number goes out as it is.
+async function checkAndWord({ r, dataUrl, text, focal35, live, pipeline, sam, wordTimeoutMs, checkTimeoutMs }) {
+  const checks = pipeline.checks || (pipeline.check ? [pipeline.check] : []);
+  const [chks] = await Promise.all([
+    live?.check && checks.length ? Promise.all(checks.map((c) => checkOutlines({ dataUrl: c.dataUrl || dataUrl, live, check: c, pipeline, timeoutMs: checkTimeoutMs, label: c.label }))) : [],
     live?.word ? wordAnswer(r, live, pipeline, wordTimeoutMs) : null,
   ]);
+  const got = chks.filter(Boolean);
+  const chk = got.find((c) => c.agreed === false) || (got.some((c) => c.skipped) ? { skipped: true } : got.length ? { agreed: true } : null);
   if (chk) r.checked = chk.agreed ? 'agreed' : chk.skipped ? 'skipped' : 'disagreed';
-  if (pipeline.check?.thumb) r.thumb = pipeline.check.thumb;
+  const thumb = checks.find((c) => c.thumb)?.thumb;
+  if (thumb) r.thumb = thumb;
   if (!chk || chk.agreed !== false) return r;
   // The wording ran alongside the check; it is not sent, and the panel says so.
   const w = pipeline.find((p) => /word the answer/.test(p.step));
   if (w) { w.result = { used: false, fellBack: chk.fix ? 'not sent: Spark corrected SAM, so we re-measured' : 'not sent: Spark’s check disagreed' }; delete w.error; }
-  if (!chk.fix) return refuse(r, pipeline, chk.tip);
+  // The correction round is for one photo; a multi-photo floor asks for that photo again instead.
+  if (!chk.fix || pipeline.checks) return refuse(r, pipeline, chk.tip);
   return correctOnce({ r, chk, dataUrl, text, focal35, live, pipeline, sam, wordTimeoutMs, checkTimeoutMs });
 }
 
@@ -366,9 +395,18 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline, sam = { cac
     return sam.cache.get(c);
   }));
   if (presetRead) return measureFrom({ dataUrl, text, focal35, live, pipeline, read: presetRead, segsFor, sam });
+  const rd = await readTask({ dataUrl, text, live, pipeline });
+  if (rd.done) return rd.done;
+  const { read } = rd;
+  if (read.task === 'face') return faceFlow({ dataUrl, live, read, pipeline, focal35 });
+  return measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsFor, sam });
+}
+
+// 1. Read the photo and the message (Spark, backed up by the words they typed). Returns { read } or,
+// when the answer is already known (face off, no models), { done: result }.
+async function readTask({ dataUrl, text, live, pipeline }) {
   const guess = guessFromText(text);
 
-  // 1. Read the photo and the message.
   let read;
   if (live) {
     try {
@@ -394,10 +432,9 @@ async function measureCore({ dataUrl, text, focal35, live, pipeline, sam = { cac
   if (read.ruler === 'none') read.ruler = DEFAULT_RULER[read.task];
 
   // Face measuring is off unless SIGHT_FACE=1 (the code stays; the demo is about jobs for a business).
-  if (read.task === 'face' && !faceEnabled()) return { ...finishErr(read, pipeline, FACE_OFF), unavailable: 'face' };
-  if (!live) return finishErr(read, pipeline, 'Measuring needs the Meta models switched on for this server.');
-  if (read.task === 'face') return faceFlow({ dataUrl, live, read, pipeline, focal35 });
-  return measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsFor, sam });
+  if (read.task === 'face' && !faceEnabled()) return { done: { ...finishErr(read, pipeline, FACE_OFF), unavailable: 'face' } };
+  if (!live) return { done: finishErr(read, pipeline, 'Measuring needs the Meta models switched on for this server.') };
+  return { read };
 }
 
 async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsFor, sam }) {
@@ -537,26 +574,8 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
   if (read.task === 'floor_tile') {
     // A room is a rectangle: its long and short sides, not the corner-to-corner diagonal.
     const roomL = (m.rectLengthMm || m.lengthMm) / 25.4, roomW = (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4;
-    const tw = read.tile_w_in || 12, tl = read.tile_l_in || read.tile_w_in || 12;
-    const p = tilePlan({ roomW, roomL, tileW: tw, tileL: tl });
-    pipeline.add({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles: p.buyTiles, cuts: p.cuts?.length } });
     if (line) overlay.lines.push({ ...line, label: ftIn(roomL / 12) });
-    return finish({
-      ...base,
-      headline: `Buy ${p.buyTiles} tiles`,
-      business: {
-        job: `Tile a ${ftIn(roomW / 12)} × ${ftIn(roomL / 12)} floor: ${p.room.sqft} sq ft`,
-        materials: [`${p.buyTiles} tiles, ${tw} × ${tl} in`, 'Thinset, grout and spacers'],
-        quote: `${p.room.sqft} sq ft × $X per sq ft installed (set by the business)`,
-      },
-      job: { sqft: p.room.sqft },
-      answer: `The floor is about ${ftIn(roomW / 12)} by ${ftIn(roomL / 12)} (${p.room.sqft} sq ft). In ${tw} × ${tl} in tile that’s ${p.tilesForFloor} tiles laid, plus ${p.extraPct}% extra for cuts and mistakes: buy ${p.buyTiles} tiles.`,
-      numbers: [{ label: 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: 'Area', value: `${p.room.sqft} sq ft` }, { label: 'Range', value: `${Math.round(p.room.sqft * (1 - 2 * m.plusMinusPct))} – ${Math.round(p.room.sqft * (1 + 2 * m.plusMinusPct))} sq ft (±${2 * pmPct}%)` }, { label: 'Full tiles', value: String(p.fullTiles) }, { label: 'Buy', value: `${p.buyTiles} tiles (+${p.extraPct}%)` }],
-      shopping: [`${p.buyTiles} tiles, ${tw} × ${tl} in (same lot number on every box)`, 'Thinset mortar and a notched trowel (ask the store which notch fits your tile)', 'Grout and 1/8 in spacers', 'Tile cutter or wet saw'],
-      steps: [`Start at the center of the room: ${p.layout.across} across, ${p.layout.along} along.`, ...p.cuts.map((c) => `${c.count} × ${c.what}: ${c.cut}.`), 'Tape-measure one wall before the first cut.'],
-      confidence: m.confidence === 'good' ? 'fair' : m.confidence,
-      ask: [...m.notes, 'Measured from one photo — check one wall with a tape before cutting.'].join(' '),
-    });
+    return tileAnswer({ ...base, roomW, roomL, plusMinusPct: m.plusMinusPct, confidence: m.confidence, notes: m.notes });
   }
 
   // General size. Boxy things (a coaster, a rug, a phone) get their two sides; round or odd shapes
@@ -588,6 +607,105 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
     shopping: [], steps: ['Send the same shot again later to see if it changed.'],
     confidence: m.confidence, ask: tips,
   });
+}
+
+// The tile answer from a room's sides in inches: tiles to buy, layout, cut list. photos > 1 when the room
+// was combined from several photos on the paper's plane (floorMultiFlow).
+function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], photos = 1, ...base }) {
+  const tw = read.tile_w_in || 12, tl = read.tile_l_in || read.tile_w_in || 12;
+  const p = tilePlan({ roomW, roomL, tileW: tw, tileL: tl });
+  base.pipeline.add({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles: p.buyTiles, cuts: p.cuts?.length } });
+  const pmPct = Math.round(plusMinusPct * 100);
+  const size = `${ftIn(roomW / 12)} by ${ftIn(roomL / 12)} (${p.room.sqft} sq ft)`;
+  const from = photos > 1 ? `, combined from ${photos} photos on the paper’s plane` : '';
+  return finish({
+    ...base, read,
+    headline: `Buy ${p.buyTiles} tiles`,
+    business: {
+      job: `Tile a ${ftIn(roomW / 12)} × ${ftIn(roomL / 12)} floor: ${p.room.sqft} sq ft${photos > 1 ? ` (from ${photos} photos)` : ''}`,
+      materials: [`${p.buyTiles} tiles, ${tw} × ${tl} in`, 'Thinset, grout and spacers'],
+      quote: `${p.room.sqft} sq ft × $X per sq ft installed (set by the business)`,
+    },
+    job: { sqft: p.room.sqft },
+    answer: `The floor is about ${size}${from}. In ${tw} × ${tl} in tile that’s ${p.tilesForFloor} tiles laid, plus ${p.extraPct}% extra for cuts and mistakes: buy ${p.buyTiles} tiles.`,
+    numbers: [{ label: 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: 'Area', value: `${p.room.sqft} sq ft` }, { label: 'Range', value: `${Math.round(p.room.sqft * (1 - 2 * plusMinusPct))} – ${Math.round(p.room.sqft * (1 + 2 * plusMinusPct))} sq ft (±${2 * pmPct}%)` }, ...(photos > 1 ? [{ label: 'Photos', value: `${photos} photos` }] : []), { label: 'Full tiles', value: String(p.fullTiles) }, { label: 'Buy', value: `${p.buyTiles} tiles (+${p.extraPct}%)` }],
+    shopping: [`${p.buyTiles} tiles, ${tw} × ${tl} in (same lot number on every box)`, 'Thinset mortar and a notched trowel (ask the store which notch fits your tile)', 'Grout and 1/8 in spacers', 'Tile cutter or wet saw'],
+    steps: [`Start at the center of the room: ${p.layout.across} across, ${p.layout.along} along.`, ...p.cuts.map((c) => `${c.count} × ${c.what}: ${c.cut}.`), 'Tape-measure one wall before the first cut.'],
+    confidence: confidence === 'good' ? 'fair' : confidence,
+    ask: [...notes, photos > 1 ? `Combined from ${photos} photos — check one wall with a tape before cutting.` : 'Measured from one photo — check one wall with a tape before cutting.'].join(' '),
+  });
+}
+
+// ---------- whole floor from several photos ----------
+//
+// 2 to 4 photos of ONE floor with the same sheet of paper in every shot (floor.js has the geometry and
+// the 180° rule). Per photo: SAM outlines the floor and the paper, our geometry maps the floor onto the
+// paper's plane. The floors are then combined into one, and Spark checks every photo's outlines before
+// the number goes out (checkAndWord). The result carries overlays, one per photo, for the page.
+export const MULTI_PAPER_TIP = 'Leave the sheet of paper where it is and shoot the floor from another doorway or corner.';
+const SQFT_PER_MM2 = 1 / 92903.04;
+
+async function floorMultiFlow({ dataUrls, text, live, read, pipeline, wordTimeoutMs, checkTimeoutMs }) {
+  const n = dataUrls.length;
+  const refKind = FLAT_REFERENCES[read.ruler]?.shape === 'rect' ? read.ruler : 'paper_letter';
+  const R = FLAT_REFERENCES[refKind];
+  const concepts = [read.target || 'floor', R.samConcept];
+  const label = (i) => `photo ${i + 1} of ${n}`;
+  const retake = (i, why) => `I couldn’t find the ${why} in ${label(i)}. ${MULTI_PAPER_TIP} Retake that one with the whole ${why} in the shot.`;
+
+  // 2. Outline the floor and the paper in every photo, all at once (one step per photo as it comes back).
+  const t0 = performance.now();
+  let segs;
+  try {
+    segs = await Promise.all(dataUrls.map((d, i) => Promise.all(concepts.map((c) => live.segment(d, c))).then((sg) => {
+      pipeline.add({ model: 'sam-3.1', step: `${label(i)}: outline ${concepts.join(' and ')}`, ms: Math.round(performance.now() - t0), result: samResult(concepts, sg) });
+      return sg;
+    })));
+  } catch (e) {
+    pipeline.add({ model: 'sam-3.1', step: `outline ${n} photos`, error: String(e.message).slice(0, 200) });
+    return finishErr(read, pipeline, samDown(e));
+  }
+
+  // 3. Map each photo's floor onto the paper's plane.
+  const overlays = [], photos = [];
+  pipeline.checks = [];
+  const fail = (i, ask) => ({ ...finishErr(read, pipeline, ask, null, overlays[i]), overlays, photo: i + 1 });
+  for (let i = 0; i < n; i++) {
+    const [tSeg, rSeg] = segs[i];
+    const frame = tSeg.frame || rSeg.frame;
+    const target = best(tSeg.objects), ruler = best(rSeg.objects);
+    overlays.push({ frame, outlines: [outlineOf(target, concepts[0], 'target'), outlineOf(ruler, rulerLabel(refKind), 'ruler')].filter(Boolean), lines: [], photo: i + 1 });
+    pipeline.checks.push({ dataUrl: dataUrls[i], label: label(i), frame, items: [
+      target && { role: 'target', obj: target, name: `the ${concepts[0]}`, expect: `the ${concepts[0]} the person wants measured` },
+      ruler && { role: 'ruler', obj: ruler, name: `a ${R.label}`, expect: `a ${rulerSpec(refKind)}`, ruler: refKind },
+    ].filter(Boolean) });
+    if (!target) return fail(i, retake(i, concepts[0]));
+    if (!ruler) return fail(i, retake(i, R.label));
+    const f = floorOnPaper({ target, ref: ruler, refKind });
+    pipeline.add({ model: 'first-answer math', step: `${label(i)}: map the floor onto the ${R.label}’s plane`, result: f.ok ? { sqftSeen: Math.round(f.areaMm2 * SQFT_PER_MM2), plusMinusPct: f.plusMinusPct, confidence: f.confidence } : { ok: false, reason: f.reason } });
+    if (!f.ok) return fail(i, `I couldn’t measure ${label(i)}: ${f.reason}. ${MULTI_PAPER_TIP} Retake that one with the whole ${R.label} in the shot.`);
+    photos.push(f);
+  }
+
+  // 4. Combine. A photo whose floor is more than a meter from the others is not the same floor (or
+  // the paper moved): the best single photo answers instead, and the note says why.
+  const c = combineFloors(photos);
+  const base = { task: read.task, read, pipeline, measuredAgainst: rulerSpec(refKind), overlays };
+  if (!c.ok) {
+    pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { combined: false, photo: c.refused != null ? c.refused + 1 : null, gapMm: c.gapMm ?? null, why: c.reason || 'does not touch the floor in the other photos' } });
+    const k = photos.indexOf(photos.reduce((a, b) => (b.areaMm2 > a.areaMm2 ? b : a)));
+    const m = photos[k].measured;
+    const r = tileAnswer({ ...base, overlay: overlays[k], roomW: (m.rectWidthMm || m.areaMm2 / m.lengthMm) / 25.4, roomL: (m.rectLengthMm || m.lengthMm) / 25.4, plusMinusPct: m.plusMinusPct, confidence: m.confidence, notes: m.notes });
+    r.note = `The photos weren’t combined: photo ${c.refused != null ? c.refused + 1 : '?'} doesn’t touch the floor seen in the others, so it may be a different floor, or the paper moved. This answer is from photo ${k + 1} alone. ${MULTI_PAPER_TIP}`;
+    r.combined = { photos: n, ok: false, from: k + 1 };
+    return r;
+  }
+  const coverage = c.photos.map((p, i) => `photo ${i + 1} ${Math.round(p.coverage * 100)}%`).join(', ');
+  pipeline.add({ model: 'first-answer math', step: `combine ${n} photos on the ${R.label}’s plane`, result: { sqft: c.sqft, widthFt: Math.round((c.widthMm / 304.8) * 10) / 10, lengthFt: Math.round((c.lengthMm / 304.8) * 10) / 10, coverage, turned: c.photos.filter((p) => p.flipped).length, plusMinusPct: c.plusMinusPct } });
+  const notes = [...new Set(photos.flatMap((p) => p.notes))];
+  const r = tileAnswer({ ...base, overlay: overlays[0], roomW: c.widthMm / 25.4, roomL: c.lengthMm / 25.4, plusMinusPct: c.plusMinusPct, confidence: photos.every((p) => p.confidence === 'good') ? 'good' : 'low', notes, photos: n });
+  r.combined = { photos: n, ok: true, sqft: c.sqft, coverage: c.photos.map((p) => p.coverage), turned: c.photos.map((p) => p.flipped) };
+  return r;
 }
 
 // Face: SAM outlines the card, the face, both eyes, the nose and the mouth at once.
@@ -721,7 +839,7 @@ Numbers: copy every number exactly as it appears in the facts, with its unit. Ne
 No prices, no dates, no greetings, no emoji, no markdown, no lists. Do not mention AI, models or photos being analyzed.`;
 
 export const WORD_PROMPT_ES = `
-Write the message in Spanish (plain Latin American Spanish, as you would text a customer). Keep every number exactly as in the facts, as digits, and write its unit in Spanish: sq ft = pies cuadrados, sq in = pulgadas cuadradas, gallons = galones, five-gallon pails = cubetas de cinco galones, in = pulgadas, ft = pies, tiles = baldosas, men’s = de hombre, women’s = de mujer, US stays EE. UU. before the number, EU stays EU before the number, mm and cm stay. A quarter (the coin) is "una moneda de un cuarto de dólar". Repair = reparar, replace = reemplazar, fits = cabe, won't fit = no cabe, tight = justo.`;
+Write the message in Spanish (plain Latin American Spanish, as you would text a customer). Keep every number exactly as in the facts, as digits, and write its unit in Spanish: sq ft = pies cuadrados, sq in = pulgadas cuadradas, gallons = galones, five-gallon pails = cubetas de cinco galones, in = pulgadas, ft = pies, tiles = baldosas, photos = fotos, men’s = de hombre, women’s = de mujer, US stays EE. UU. before the number, EU stays EU before the number, mm and cm stay. A quarter (the coin) is "una moneda de un cuarto de dólar". Repair = reparar, replace = reemplazar, fits = cabe, won't fit = no cabe, tight = justo.`;
 
 const NUM_RE = /\d+(?:,\d{3})*(?:\.\d+)?(?:\/\d+)?/g;
 const NUMBER_WORDS = /(?<![\p{L}])(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|dozen|half|halves|quarter|third|double|twice|triple|single|once|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|doce|quince|veinte|treinta|cuarenta|cincuenta|cien|ciento|mil|docena|mitad|doble|triple)(?![\p{L}])/giu;
@@ -748,6 +866,7 @@ const SUFFIX_UNITS = [
   ['pct', /^\s*(?:%|percent\b|por\s*ciento\b)/i],
   ['hour', /^\s*(?:hours?\b|hrs?\b|horas?\b)/i],
   ['degF', /^\s*(?:°\s*F\b|degrees?\s+F(?:ahrenheit)?\b|grados?\s+F(?:ahrenheit)?\b)/i],
+  ['photos', /^\s*(?:photos?\b|pictures?\b|shots?\b|fotos?\b|im[aá]gen(?:es)?\b)/i],
   ['men', new RegExp(`^\\s*(?:men${APOS}?s\\b|(?:de\\s+)?(?:hombre|caballero)s?\\b)`, 'i')],
   ['women', new RegExp(`^\\s*(?:women${APOS}?s\\b|(?:de\\s+)?(?:mujer|dama|señora)s?\\b)`, 'i')],
 ];
@@ -872,7 +991,7 @@ export function checkWording(text, facts, headline = '', { task = facts?.task } 
   }
   return { ok: true };
 }
-const UNIT_NAME = { sqft: 'sq ft', sqin: 'sq in', pail: 'pails', gallon: 'gallons', tiles: 'tiles', mm: 'mm', cm: 'cm', in: 'in', ft: 'ft', pct: '%', men: 'men’s', women: 'women’s', eu: 'EU', us: 'US', hour: 'hours', degF: '°F' };
+const UNIT_NAME = { sqft: 'sq ft', sqin: 'sq in', pail: 'pails', gallon: 'gallons', tiles: 'tiles', mm: 'mm', cm: 'cm', in: 'in', ft: 'ft', pct: '%', men: 'men’s', women: 'women’s', eu: 'EU', us: 'US', hour: 'hours', degF: '°F', photos: 'photos' };
 
 export function wordingFacts(r) {
   // On a verdict task Spark gets only material without verdict words, so it has nothing to flip.
@@ -981,11 +1100,11 @@ export function fixFrom(outlines, got) {
   return phrase || point ? { role: bad.role, phrase, point } : null;
 }
 
-async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK_TIMEOUT_MS, final = false }) {
+async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK_TIMEOUT_MS, final = false, label = null }) {
   const items = check.items.filter((it) => it.obj);
   if (!items.length) return null;
   const t0 = performance.now();
-  const step = { model: 'muse-spark-1.3', step: 'check SAM’s outlines on the photo' };
+  const step = { model: 'muse-spark-1.3', step: label ? `${label}: check SAM’s outlines on the photo` : 'check SAM’s outlines on the photo' };
   let timer, images = [];
   try {
     // The timeout starts now and covers drawing the outlines (in a worker thread) as well as Spark's reply.
@@ -1004,7 +1123,7 @@ async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK
     const fix = agreed || final ? null : fixFrom(outlines, got);
     pipeline.add({ ...step, ms: Math.round(performance.now() - t0), result: { check: agreed ? 'agrees' : 'disagrees', outlines: outlines.map(({ color, ok, seen }) => ({ color, ok, seen })), problem: agreed ? '' : problem, images: images.length, fix: fix ? (fix.phrase || 'a point') : null } });
     if (agreed) return { agreed: true, outlines };
-    return { agreed: false, tip: retakeTip(outlines, ans?.retake_tip), fix, outlines };
+    return { agreed: false, tip: retakeTip(outlines, ans?.retake_tip, label), fix, outlines };
   } catch (e) {
     pipeline.add({ ...step, ms: Math.round(performance.now() - t0), error: String(e.message).slice(0, 200), result: { check: 'skipped', why: friendlyError(e.message) } });
     return { skipped: true };
@@ -1015,13 +1134,14 @@ async function checkOutlines({ dataUrl, live, check, pipeline, timeoutMs = CHECK
 
 // The retake tip the customer sees. A wrong coin gets the fix in their words ("it's a dime");
 // Spark's own tip is used only if it is short and has no numbers in it.
-function retakeTip(outlines, sparkTip) {
+function retakeTip(outlines, sparkTip, label = null) {
   const bad = outlines.find((o) => !o.ok) || outlines[0];
   const coin = bad.role === 'ruler' && FLAT_REFERENCES[bad.ruler]?.shape === 'circle' ? coinFromText(bad.seen.toLowerCase()) : null;
   if (coin && coin !== bad.ruler) return `Muse Spark says the coin looks like a ${rulerLabel(coin)}, not a ${rulerLabel(bad.ruler)}, so I didn’t measure. If it is, send the photo again and say “it’s a ${rulerLabel(coin)}”.`;
   const tip = String(sparkTip || '').trim();
-  const own = tip && tip.length <= 200 && !/\d/.test(tip) ? tip : `Retake it with ${bad.name} whole, in focus and near the middle of the shot.`;
-  return `I didn’t measure this one: Muse Spark checked SAM’s ${ROLE_PHRASE[bad.color.toLowerCase()]} and saw ${bad.seen}, not ${bad.name}. ${uncolor(own)}`;
+  const own = tip && tip.length <= 200 && !/\d/.test(tip) ? tip : `Retake ${label ? 'that one' : 'it'} with ${bad.name} whole, in focus and near the middle of the shot.`;
+  // For a multi-photo floor the tip names the photo ("in photo 2 of 3, ...").
+  return `I didn’t measure this one: ${label ? `in ${label}, ` : ''}Muse Spark checked SAM’s ${ROLE_PHRASE[bad.color.toLowerCase()]} and saw ${bad.seen}, not ${bad.name}. ${uncolor(own)}`;
 }
 
 // A failed call in a few plain words for the public panel; raw upstream bodies never reach the page.
@@ -1059,9 +1179,10 @@ export function stepDetail(s) {
   }
   if (r.withheld) return 'measured, but not sent: Spark disagreed with the outlines';
   if (r.corrected === false) return `nothing new from SAM (${r.why}); no number sent`;
+  if (r.combined === false) return `not combined: photo ${r.photo} ${r.why}${r.gapMm ? ` (${Math.round(r.gapMm / 304.8 * 10) / 10} ft away)` : ''}; best single photo used`;
   if (r.task && r.ruler) return `task: ${r.task.replace(/_/g, ' ')} · target: ${r.target} · ruler: ${rulerLabel(r.ruler)}${r.language === 'es' ? ' · language: Spanish' : ''}`;
-  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)' };
-  const pretty = (k) => NAMED[k] || k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/Mm2\b/, ' mm²').replace(/Mm\b/, ' mm').replace(/Ft\b/, ' ft').replace(/In2\b/, ' sq in').replace(/Pct\b/, ' %').toLowerCase();
+  const NAMED = { plusMinusPct: 'accuracy', overFt: 'distance along the ground (ft)', sqftSeen: 'floor seen (sq ft)', turned: 'turned 180°' };
+  const pretty = (k) => NAMED[k] || k.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/\s?Mm2\b/, ' mm²').replace(/\s?Mm\b/, ' mm').replace(/\s?Ft\b/, ' ft').replace(/\s?In2\b/, ' sq in').replace(/\s?Pct\b/, ' %').toLowerCase();
   const keep = Object.entries(r).filter(([k, v]) => !['ok', 'notes', 'reason', 'clipped'].includes(k) && v != null && ['number', 'string', 'boolean'].includes(typeof v));
   return keep.slice(0, 5).map(([k, v]) => `${pretty(k)}: ${typeof v === 'number' ? (k.endsWith('Pct') ? `±${Math.round(v * 100)}%` : Math.round(v * 100) / 100) : v}`).join(' · ');
 }
@@ -1077,7 +1198,8 @@ const samDown = (e) => (e?.name === 'MetaBudgetError' ? DAILY_CAP_MESSAGE : 'Cou
 function refuse(r, pipeline, tip) {
   for (const p of pipeline) if (p.model === 'first-answer math' && p.result) { p.result = { withheld: true }; delete p.error; }
   const overlay = r.overlay ? { ...r.overlay, lines: [] } : null;
-  return { ...finishErr(r.read, pipeline, tip, r.task, overlay), refused: 'spark-check', checked: 'disagreed' };
+  const overlays = r.overlays ? r.overlays.map((o) => ({ ...o, lines: [] })) : undefined;
+  return { ...finishErr(r.read, pipeline, tip, r.task, overlay), ...(overlays ? { overlays } : {}), refused: 'spark-check', checked: 'disagreed' };
 }
 
 function finish(r) {
