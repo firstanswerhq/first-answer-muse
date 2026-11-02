@@ -137,3 +137,15 @@ test('a faint extra "door" outline that happens to cover the ground does not cau
   });
   assert.equal(r.ok, true, r.ask);
 });
+
+test('the door-overlap refusal is translated for a Spanish customer', async () => {
+  const s = scene(TWO_CAR);
+  const door = parseSam(s.doorText);
+  const r = await measureAnything({
+    dataUrl: 'x', text: '¿Qué tan grande es mi entrada? Necesito saber cuánto sellador comprar.',
+    deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door', language: 'es' }), { driveway: door, 'garage door': door }),
+  });
+  assert.notEqual(r.ok, true);
+  assert.match(r.ask, /El contorno de la entrada cayó sobre la puerta del garaje/);
+  assert.doesNotMatch(r.ask, /landed on/);
+});

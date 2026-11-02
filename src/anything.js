@@ -976,7 +976,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsF
   if (!frame) return finishErr(read, pipeline, 'Couldn’t read the photo size; please send it again.', null, overlay);
   // A ground surface never sits on a door. If SAM's "driveway" outline is mostly inside any door it found,
   // it outlined the door, not the ground: refuse instead of measuring a door as a driveway.
-  const onDoor = (dSeg.objects || []).find((o) => o.box && surface.box && (o === door || (o.c ?? 1) >= 0.3) && boxInside(surface.box, o.box) > 0.6);
+  const onDoor = (dSeg.objects || []).find((o) => o.box && surface.box && (o === door || (o.c ?? 1) >= 0.5) && boxInside(surface.box, o.box) > 0.6);
   if (onDoor) return finishErr(read, pipeline, `The outline for the ${concepts[0]} landed on the ${front ? 'door' : 'garage door'}, not on the ground, so I didn’t measure it. Stand at the street end, back far enough that the ground in front of the ${front ? 'door' : 'garage door'} is in the shot, and send it again.`, null, overlay);
   const hfovDeg = focal35 && focal35 > 8 && focal35 < 300 ? (2 * Math.atan(18 / focal35) * 180) / Math.PI : 69;
   const m = measureSurface({ surface, ref: door, refKind, frame, hfovDeg });

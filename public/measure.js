@@ -18,8 +18,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const SAMPLES = [
   { id: 'tile', label: 'Tile floor', text: 'How many 12 inch tiles do I need for this elevator floor? I left a sheet of printer paper on it.' },
   { id: 'windshield', label: 'Windshield chip', text: 'Repair or replace this chip? I put a quarter next to it.' },
-  { id: 'shoe', label: 'Shoe size', text: 'What shoe size am I? My foot is on a sheet of paper.' },
-  { id: 'shed', label: 'Shed fit', text: 'Will a 12 ft wide shed fit between my fence and the house?' },
+  { id: 'shoe', label: 'Shoe size', text: 'What shoe size am I? My foot is next to a sheet of paper.' },
   { id: 'driveway', label: 'Driveway', text: 'How big is my driveway? I need to know how much sealer to buy.' },
 ];
 const FACE = { id: 'face', label: 'Face', text: 'Gift card flat on my forehead. Measure my eye spacing.' };
