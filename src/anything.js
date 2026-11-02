@@ -418,10 +418,11 @@ const PAPER_ALTS = ['white paper', 'rectangular white sheet'];
 // Clear glass on a dark dashboard is hard for SAM to outline as a "chip"; other plain wordings for the same
 // damage are tried (one at a time, only while nothing is found).
 const GLASS_ALTS = ['star-shaped crack in glass', 'small crack in windshield', 'damaged spot on glass'];
-export const CONCEPT_ALTS = { 'sheet of paper': PAPER_ALTS, chip: GLASS_ALTS, crack: GLASS_ALTS };
-export async function segmentWithAlts(live, dataUrl, concept) {
+// The glass wordings are only for a windshield job: a crack in a wall or sidewalk must not turn into a window.
+const altsFor = (concept, task) => (concept === 'sheet of paper' ? PAPER_ALTS : task === 'windshield_chip' && (concept === 'chip' || concept === 'crack') ? GLASS_ALTS : []);
+export async function segmentWithAlts(live, dataUrl, concept, task) {
   let seg = await live.segment(dataUrl, concept);
-  for (const alt of CONCEPT_ALTS[concept] || []) {
+  for (const alt of altsFor(concept, task)) {
     if ((seg.objects || []).length) break;
     try { const s2 = await live.segment(dataUrl, alt); if ((s2.objects || []).length) seg = s2; } catch { /* keep the empty result */ }
   }
@@ -443,9 +444,9 @@ const confOf = (seg) => { const cs = (seg.objects || []).map((o) => o.c).filter(
 
 async function measureCore({ dataUrl, text, focal35, live, pipeline, sam = { cache: new Map(), override: null }, presetRead = null }) {
   // SAM's outlines for this photo, by concept: a second attempt reuses them, except the one Spark fixed.
-  const segsFor = (concepts) => Promise.all(concepts.map((c, i) => {
+  const segsFor = (concepts, task) => Promise.all(concepts.map((c, i) => {
     if (sam.override && sam.override.idx === i) return sam.override.seg;
-    if (!sam.cache.has(c)) sam.cache.set(c, segmentWithAlts(live, dataUrl, c));
+    if (!sam.cache.has(c)) sam.cache.set(c, segmentWithAlts(live, dataUrl, c, task));
     return sam.cache.get(c);
   }));
   if (presetRead) return measureFrom({ dataUrl, text, focal35, live, pipeline, read: presetRead, segsFor, sam });
@@ -501,7 +502,7 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
   if (read.task === 'gap_fit') concepts.push(read.second_target || 'house wall');
   let segs;
   try {
-    segs = await segsFor(concepts);
+    segs = await segsFor(concepts, read.task);
   } catch (e) {
     pipeline.add({ model: 'sam-3.1', step: 'outline', error: String(e.message).slice(0, 200) });
     return finishErr(read, pipeline, samDown(e));
@@ -975,7 +976,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsF
   if (!frame) return finishErr(read, pipeline, 'Couldn’t read the photo size; please send it again.', null, overlay);
   // A ground surface never sits on a door. If SAM's "driveway" outline is mostly inside any door it found,
   // it outlined the door, not the ground: refuse instead of measuring a door as a driveway.
-  const onDoor = (dSeg.objects || []).find((o) => o.box && surface.box && boxInside(surface.box, o.box) > 0.6);
+  const onDoor = (dSeg.objects || []).find((o) => o.box && surface.box && (o === door || (o.c ?? 1) >= 0.3) && boxInside(surface.box, o.box) > 0.6);
   if (onDoor) return finishErr(read, pipeline, `The outline for the ${concepts[0]} landed on the ${front ? 'door' : 'garage door'}, not on the ground, so I didn’t measure it. Stand at the street end, back far enough that the ground in front of the ${front ? 'door' : 'garage door'} is in the shot, and send it again.`, null, overlay);
   const hfovDeg = focal35 && focal35 > 8 && focal35 < 300 ? (2 * Math.atan(18 / focal35) * 180) / Math.PI : 69;
   const m = measureSurface({ surface, ref: door, refKind, frame, hfovDeg });
@@ -986,7 +987,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsF
   const seal = sealerNeeded(m.high, kind);
   const fmt = (n) => n.toLocaleString('en-US');
   const sizeWords = m.widthFt && m.lengthFt ? ` (about ${m.widthFt} ft wide by ${m.lengthFt} ft long)` : '';
-  const answer = `Your ${concepts[0]} is about ${fmt(m.sqft)} sq ft${sizeWords}, between ${fmt(m.low)} and ${fmt(m.high)} sq ft, measured against the ${R.label}. ${seal.length === 1 ? `Buy ${seal[0].qty} ${seal[0].qty === 1 ? seal[0].unit : `${seal[0].unit}s`} of ${seal[0].kind} sealer per coat.` : `That’s ${seal[0].qty} gallons of concrete sealer or ${seal[1].qty} five-gallon pails of asphalt sealer per coat.`}`;
+  const answer = `Your ${concepts[0]} is about ${fmt(m.sqft)} sq ft${sizeWords}, between ${fmt(m.low)} and ${fmt(m.high)} sq ft, measured against the ${R.label}. ${seal.length === 1 ? `Buy ${seal[0].qty} ${seal[0].qty === 1 ? seal[0].unit : `${seal[0].unit}s`} of ${seal[0].kind} sealer per coat.` : `That’s ${seal[0].qty} ${seal[0].qty === 1 ? 'gallon' : 'gallons'} of concrete sealer or ${seal[1].qty} ${seal[1].qty === 1 ? 'five-gallon pail' : 'five-gallon pails'} of asphalt sealer per coat.`}`;
   return finish({
     task: 'surface_area', read, overlay, pipeline, measuredAgainst: rulerSpec(refKind),
     headline: `About ${fmt(m.sqft)} sq ft`,

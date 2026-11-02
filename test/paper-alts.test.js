@@ -32,8 +32,11 @@ test('a paper outline on the floor beats a more confident one on the wall', () =
 test('a chip SAM cannot outline is retried with other glass wordings, stopping at the first hit', async () => {
   const asked = [];
   const live = { segment: async (_d, c) => { asked.push(c); return { objects: c === 'small crack in windshield' ? [{ c: 0.7 }] : [] }; } };
-  const seg = await segmentWithAlts(live, 'x', 'chip');
+  const seg = await segmentWithAlts(live, 'x', 'chip', 'windshield_chip');
   assert.deepEqual(asked, ['chip', 'star-shaped crack in glass', 'small crack in windshield']);
+  const wall = [];
+  await segmentWithAlts({ segment: async (_d, c) => { wall.push(c); return { objects: [] }; } }, 'x', 'crack', 'size');
+  assert.deepEqual(wall, ['crack']);
   assert.equal(seg.objects.length, 1);
   const none = [];
   await segmentWithAlts({ segment: async (_d, c) => { none.push(c); return { objects: [] }; } }, 'x', 'coin');

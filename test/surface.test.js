@@ -116,3 +116,24 @@ test('boxInside: how much of one box lies inside another', async () => {
   assert.equal(boxInside({ x1: 0, y1: 0, x2: 10, y2: 10 }, { x1: 5, y1: 0, x2: 20, y2: 10 }), 0.5);
   assert.equal(boxInside({ x1: 0, y1: 0, x2: 10, y2: 10 }, { x1: 30, y1: 30, x2: 40, y2: 40 }), 0);
 });
+
+test('the two-sealer sentence has correct singular and plural wording', async () => {
+  const r = await measureAnything({
+    dataUrl: 'x', text: 'How big is my driveway? I need to know how much sealer to buy.',
+    deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door' }), driveway(TWO_CAR)),
+  });
+  assert.equal(r.ok, true, r.ask);
+  assert.match(r.answer, /That’s \d+ gallons? of concrete sealer or \d+ five-gallon pails? of asphalt sealer per coat\./);
+});
+
+test('a faint extra "door" outline that happens to cover the ground does not cause a refusal', async () => {
+  const d = driveway(TWO_CAR);
+  const gd = d['garage door'];
+  const faint = { c: 0.1, box: { x1: -1e6, y1: -1e6, x2: 1e6, y2: 1e6 }, mask: null };
+  d['garage door'] = { ...gd, objects: [...(gd.objects || []), faint] };
+  const r = await measureAnything({
+    dataUrl: 'x', text: 'How big is my driveway? I need to know how much sealer to buy.',
+    deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door' }), d),
+  });
+  assert.equal(r.ok, true, r.ask);
+});
