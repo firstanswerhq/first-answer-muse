@@ -594,7 +594,7 @@ async function send(blobs, text, { again = false, extraUrls = null, join = null 
       floorLang = r.lang === 'es' ? 'es' : 'en';
     } else if (r && r.task && r.task !== 'floor_tile') resetFloor();
   } catch {
-    errorBubble({ ask: FALLBACK_ERR, retry: true }, () => send(blobs, text, { again: true, extraUrls: earlier }));
+    errorBubble({ ask: 'Couldn’t reach Sight just now; tap Retry.', retry: true }, () => send(blobs, text, { again: true, extraUrls: earlier }));
   } finally {
     busy = false;
     $('sendBtn').disabled = false;
@@ -692,4 +692,4 @@ fetch('/api/health').then((r) => r.json()).then((h) => {
   if (h.relay === 'direct') $('privacyRoute').textContent = 'Your photo(s) and message go from our server straight to Meta’s Muse Spark and SAM 3.1';
 }).catch(() => {});
 
-bubble('note', 'Text one photo and a question. Put a gift card, quarter, sheet of paper, soda can, or a door in the shot and it becomes the ruler. Keep the ruler flat and fully visible. Windshield chip: hold a quarter flat beside the chip, not on it. Whole floor: put one sheet of paper down and never move it, then shoot from each doorway as asked (up to 4).');
+bubble('note', 'Tap a sample above, or tap the camera to use your own photo. Put something of known size flat in the shot (a quarter, a gift card, a sheet of paper, a door): that is how Sight knows the real size. Windshield chip: hold a quarter flat beside the chip, not on it. Whole floor: put one sheet of paper down and never move it, then shoot from each doorway as asked (up to 4). Answers are a first estimate, not a final quote.');

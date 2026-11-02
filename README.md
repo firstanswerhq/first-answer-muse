@@ -1,8 +1,12 @@
 # First Answer Sight
 
-**See it. Size it. Solve it.** A customer texts one photo to a local business, with something of known size in the shot (a quarter, a sheet of paper, the garage door). The customer gets the measurement, what to buy and what to do next, in English or Spanish (a Spanish question gets the whole card in Spanish). One tap on **Send this to the business** puts the job size, the materials, a quote line from that business's own price list and the photo with SAM's masks on the owner's board as a lead.
+**See it. Size it. Solve it.** A customer texts one photo to a local business, with something of known size in the shot (a quarter, a sheet of paper, the garage door). The customer gets the measurement, what to buy and what to do next, in English or Spanish (a Spanish question gets the whole card in Spanish). One tap on **Send this to the business** sends the business a lead with the job size, the materials, a quote line from its own price list, and the photo with the measured objects outlined.
 
 Built on Meta's models for the [Meta Global AI Developer Hackathon](https://cerebralvalley.ai/e/meta-ai-developer-hackathon) (Oct 26 – Nov 4, 2026), Startups track. Sight is the photo step of **First Answer**, the AI front desk that answers every text, photo, voicemail and call for a small service business.
+
+**Who did what.** Meta's Muse Spark (a vision and language model) reads the photo and checks the outlines. Meta's SAM 3.1 (Segment Anything, which outlines objects in a photo) draws them. Everything else is ours: the measuring math, the tile and sealer rules, the quote line and the owner's board.
+
+**Accuracy so far, honestly.** On one tape-measured real room, the floor area read 6–9% low (the stated ranges were wide: about 155–232 sq ft). Every other accuracy number below comes from computer-rendered test scenes, not real photos. Treat an answer as a first estimate, not a final quote. For tile, the order is sized on the high end of the range so a customer isn't left short.
 
 - Customer page: `/measure.html`
 - Front desk (text, photo, voicemail, live call): `/` and the owner boards `/owner.html` (all demo businesses) or `/owner.html?b=<business id>`
@@ -107,7 +111,7 @@ Face measuring (card on the forehead) is in the code (`src/face.js`) but **off**
 
 Every answer says what it was measured against, for example **Measured against: quarter (24.26 mm)** or **double garage door (16 × 7 ft)**, and carries a range or a confidence.
 
-| Task | Range shown | Tested against |
+| Task | Range shown | Tested against (rendered scenes, not real photos, unless noted) |
 | --- | --- | --- |
 | Close-up with paper, card, bill or plate | ±3% of the length (never finer than about 1.5 pixels at the target) | Rendered scenes with known sizes at angles up to 35° (`test/flat.test.js`, `test/anything.test.js`, `test/trust.test.js`) |
 | Close-up with a coin | ±4%, ±6% when the coin is seen at more than 30° | Same |

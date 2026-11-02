@@ -667,7 +667,7 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
 
 // The tile answer from a room's sides in inches: tiles to buy, layout, cut list. photos > 1 when the room
 // was combined from several photos on the paper's plane (floorMultiFlow).
-function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], photos = 1, floorSqft = null, other = null, ...base }) {
+export function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], photos = 1, floorSqft = null, other = null, ...base }) {
   const tw = read.tile_w_in || 12, tl = read.tile_l_in || read.tile_w_in || 12;
   const p = tilePlan({ roomW, roomL, tileW: tw, tileL: tl });
   // floorSqft: the floor is not a plain rectangle (a vanity, tub or toilet takes a bite), so the floor to
