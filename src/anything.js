@@ -678,12 +678,18 @@ function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], 
   // Tiles laid scale the plan's count (full tiles plus one per cut piece) by the open share of the
   // rectangle, so the count and the cut list under it agree.
   const tilesForFloor = open ? Math.ceil(p.tilesForFloor * (sqft / p.room.sqft)) : p.tilesForFloor;
-  const buyTiles = open ? Math.ceil(tilesForFloor * (1 + p.extraPct / 100)) : p.buyTiles;
-  base.pipeline.add({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles, cuts: p.cuts?.length, ...(open ? { openFloorSqft: sqft } : {}) } });
   const pmPct = Math.round(plusMinusPct * 100);
   // The other reading of the half turn (see combineFloors): the range spans both readings' areas.
   const otherSqft = other ? (open ? other.areaMm2 / 92903.04 : (other.widthMm * other.lengthMm) / 92903.04) : null;
   const lo = Math.round(Math.min(sqft, otherSqft ?? sqft) * (1 - 2 * plusMinusPct)), hi = Math.round(Math.max(sqft, otherSqft ?? sqft) * (1 + 2 * plusMinusPct));
+  // The order is sized on the HIGH end of the range, then the extra for cuts: running short costs more than a
+  // few spare tiles (a second order can come from another dye lot). The measured area and range still show.
+  // Capped at 25% over the measured area: a poor photo has a very wide range, and the order should not double.
+  const ORDER_CAP = 1.25;
+  const rawScale = Math.max(1, hi / sqft), capped = rawScale > ORDER_CAP, orderScale = Math.min(rawScale, ORDER_CAP);
+  const tilesForOrder = Math.ceil(tilesForFloor * orderScale);
+  const buyTiles = Math.ceil(tilesForOrder * (1 + p.extraPct / 100));
+  base.pipeline.add({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles, cuts: p.cuts?.length, ...(open ? { openFloorSqft: sqft } : {}) } });
   const room = `${ftIn(roomW / 12)} by ${ftIn(roomL / 12)}`;
   const first = open
     ? `Combined from ${photos} photos: the room is about ${room}; the floor to tile is ${sqft} sq ft (the floor isn’t a plain rectangle: a vanity, tub or toilet takes up part of it).`
@@ -698,9 +704,9 @@ function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes = [], 
       quote: `${sqft} sq ft × $X per sq ft installed (set by the business)`,
     },
     job: { sqft },
-    answer: `${first} In ${tw} × ${tl} in tile that’s ${tilesForFloor} tiles laid, plus ${p.extraPct}% extra for cuts and mistakes: buy ${buyTiles} tiles.${next}`,
+    answer: `${first} In ${tw} × ${tl} in tile that’s ${tilesForFloor} tiles laid. To be safe the order covers ${capped ? `${Math.round((ORDER_CAP - 1) * 100)}% more than the measured area` : `the high end of the range (${hi} sq ft)`}, plus ${p.extraPct}% extra for cuts and mistakes: buy ${buyTiles} tiles.${next}`,
     photos, wantMore: photos > 1 && photos < MAX_PHOTOS, openFloor: open || undefined,
-    numbers: [{ label: open ? 'Room' : 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: open ? 'Floor to tile' : 'Area', value: `${sqft} sq ft` }, { label: 'Range', value: other ? `${lo} – ${hi} sq ft` : `${lo} – ${hi} sq ft (±${2 * pmPct}%)` }, ...(photos > 1 ? [{ label: 'Photos', value: `${photos} photos` }] : []), ...(open ? [] : [{ label: 'Full tiles', value: String(p.fullTiles) }]), { label: 'Buy', value: `${buyTiles} tiles (+${p.extraPct}%)` }],
+    numbers: [{ label: open ? 'Room' : 'Floor', value: `${ftIn(roomW / 12)} × ${ftIn(roomL / 12)}` }, { label: open ? 'Floor to tile' : 'Area', value: `${sqft} sq ft` }, { label: 'Range', value: other ? `${lo} – ${hi} sq ft` : `${lo} – ${hi} sq ft (±${2 * pmPct}%)` }, ...(photos > 1 ? [{ label: 'Photos', value: `${photos} photos` }] : []), ...(open ? [] : [{ label: 'Full tiles', value: String(p.fullTiles) }]), { label: 'Buy', value: `${buyTiles} tiles (+${p.extraPct}% for cuts)` }],
     shopping: [`${buyTiles} tiles, ${tw} × ${tl} in (same lot number on every box)`, 'Thinset mortar and a notched trowel (ask the store which notch fits your tile)', 'Grout and 1/8 in spacers', 'Tile cutter or wet saw'],
     steps: [`Start at the center of the room: ${p.layout.across} across, ${p.layout.along} along.`, ...p.cuts.map((c) => `${c.count} × ${c.what}: ${c.cut}.`), ...(open ? ['The cut list is for the open floor; fixtures take their own cuts.'] : []), 'Tape-measure one wall before the first cut.'],
     confidence: other ? 'low' : confidence === 'good' ? 'fair' : confidence,

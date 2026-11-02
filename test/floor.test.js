@@ -203,6 +203,12 @@ test('a floor that is not a plain rectangle (a vanity takes a bite) combines, wi
   const roomSqft = (3000 * 2200) / 92903.04;
   assert.ok(laid >= Math.floor((Number(r.numbers.find((n) => n.label === 'Full tiles')?.value ?? 0) + pieces) * (sqft / roomSqft)) - 1, `laid ${laid} vs pieces ${pieces}`);
   assert.ok(laid < pieces + 70, `laid ${laid} should not exceed the rectangle's count`);
+  // The order covers the high end of the range (capped at +25%), then the 15% for cuts.
+  const buy = Number(r.answer.match(/buy (\d+) tiles/)[1]);
+  const hiSqft = Number(r.answer.match(/high end of the range \((\d+) sq ft\)/)?.[1] ?? 0);
+  const scale = hiSqft ? Math.min(Math.max(1, hiSqft / sqft), 1.25) : 1.25;
+  assert.ok(buy >= Math.ceil(laid * scale * 1.15) - 2, `buy ${buy} should cover laid ${laid} x ${scale.toFixed(2)} x 1.15`);
+  assert.ok(buy <= Math.ceil(laid * 1.25 * 1.15) + 2, `buy ${buy} must not exceed the 25% cap`);
   assert.ok(!r.numbers.some((n) => n.label === 'Full tiles'));
   assert.equal(r.job.sqft, sqft);
   assert.match(r.business.job, /not a plain rectangle/);
@@ -485,6 +491,7 @@ test('a Spanish question gets the combined card in Spanish', async () => {
   assert.equal(r.lang, 'es');
   assert.match(r.answer, /^Combinando 3 fotos: el piso mide unos .+ \([\d.]+ pies cuadrados\)\. Con baldosas .* compra \d+ baldosas\. Manda una más si todavía falta una esquina, o toca Enviar al negocio\.$/);
   assert.equal(r.numbers.find((n) => n.label === 'Fotos').value, '3 fotos');
+  assert.match(r.answer, /Por seguridad, el pedido cubre (?:el extremo alto del rango \([\d,.]+ pies cuadrados\)|un \d+% más que el área medida), más 15% extra para cortes y errores/);
   assert.match(r.ask, /Combinado de 3 fotos/);
   assert.ok(r.overlays.every((o) => o.outlines.some((x) => x.label === 'hoja de papel')));
   const missing = await measureAnything({ dataUrls: urls, text: 'baldosas', deps: { ...scene(POSES, { paper: [PAPER, null, PAPER] }).deps, read: async () => R({ language: 'es' }) } });
