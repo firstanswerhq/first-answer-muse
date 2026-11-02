@@ -162,7 +162,8 @@ export function measureSurface({ surface, ref, refKind, frame, hfovDeg = 69 }) {
 }
 
 function finish({ sqft, method, confidence, widthFt, lengthFt, cameraHeightFt, refKind, R }) {
-  const spread = confidence === 'good' ? 0.12 : 0.3;
+  // ±25% when the geometry checks out: the door's height (7 or 8 ft) and a slab whose sides flare both move the area a lot; the one real driveway tested read 15-20% low.
+  const spread = confidence === 'good' ? 0.25 : 0.3;
   const r10 = (x) => Math.round(x / 10) * 10;
   const r1 = (x) => (x == null ? null : Math.round(x));
   return {

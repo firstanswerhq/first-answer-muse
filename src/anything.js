@@ -933,8 +933,8 @@ export const SEALER = {
 };
 export function sealerNeeded(sqftHigh, surface = 'unknown') {
   const out = [];
-  if (surface !== 'asphalt') out.push({ kind: 'concrete', qty: Math.ceil(sqftHigh / SEALER.concrete.perGallon), unit: 'gallon', text: `Concrete sealer: ${Math.ceil(sqftHigh / SEALER.concrete.perGallon)} gallons per coat (at about ${SEALER.concrete.perGallon} sq ft per gallon; labels say ${SEALER.concrete.labelRange})` });
-  if (surface !== 'concrete') out.push({ kind: 'asphalt', qty: Math.ceil(sqftHigh / SEALER.asphalt.perPail), unit: 'five-gallon pail', text: `Asphalt sealer: ${Math.ceil(sqftHigh / SEALER.asphalt.perPail)} five-gallon pails per coat (at about ${SEALER.asphalt.perPail} sq ft per pail; labels say ${SEALER.asphalt.labelRange})` });
+  if (surface !== 'asphalt') out.push({ kind: 'concrete', qty: Math.ceil(sqftHigh / SEALER.concrete.perGallon), unit: 'gallon', text: `Concrete sealer: ${Math.ceil(sqftHigh / SEALER.concrete.perGallon)} ${Math.ceil(sqftHigh / SEALER.concrete.perGallon) === 1 ? 'gallon' : 'gallons'} per coat (at about ${SEALER.concrete.perGallon} sq ft per gallon; labels say ${SEALER.concrete.labelRange})` });
+  if (surface !== 'concrete') out.push({ kind: 'asphalt', qty: Math.ceil(sqftHigh / SEALER.asphalt.perPail), unit: 'five-gallon pail', text: `Asphalt sealer: ${Math.ceil(sqftHigh / SEALER.asphalt.perPail)} ${Math.ceil(sqftHigh / SEALER.asphalt.perPail) === 1 ? 'five-gallon pail' : 'five-gallon pails'} per coat (at about ${SEALER.asphalt.perPail} sq ft per pail; labels say ${SEALER.asphalt.labelRange})` });
   return out;
 }
 
@@ -1002,7 +1002,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsF
     ],
     shopping: [...seal.map((x) => x.text), 'Buy for the high end of the range; return unopened extras'],
     steps: ['Clean it first: pressure wash and let it dry 24 hours.', 'Check the forecast: no rain for 24–48 hours, above 50°F.', 'Two thin coats beat one thick one; the second coat needs the same amount again.'],
-    confidence: m.confidence,
+    confidence: m.confidence === 'good' ? 'fair' : m.confidence, // a driveway is never "Measured": one real driveway read 15-20% low
     ask: m.confidence === 'low' ? `Rough number: for a tighter one, stand at the street end, straight on, phone at chest height, with the whole ${concepts[0]} and the ${front ? 'door' : 'garage door'} in the shot.` : (m.clipped ? `Part of the ${concepts[0]} runs out of the photo; the edges were carried on, so check that end with a tape.` : null),
     surface: { sqft: m.sqft, low: m.low, high: m.high, widthFt: m.widthFt, lengthFt: m.lengthFt, kind },
   });

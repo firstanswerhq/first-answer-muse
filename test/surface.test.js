@@ -36,7 +36,7 @@ test('the Driveway chip: Spark says "size", the text says driveway: measured in 
   assert.deepEqual(asked.sort(), ['driveway', 'garage door']);
   const sqft = parseFloat(r.headline.replace(/[^\d.]/g, ''));
   assert.ok(Math.abs(sqft - 432) / 432 < 0.12, `got ${r.headline}`);
-  assert.equal(r.confidence, 'good');
+  assert.equal(r.confidence, 'fair'); // never "Measured" for a driveway
   assert.ok(r.surface.low <= 432 && r.surface.high >= 432, 'range covers the truth');
   assert.match(r.numbers.find((n) => n.label === 'Range').value, /^\d[\d,]* – \d[\d,]* sq ft$/);
   // Sealer is bought for the high end of the range.
@@ -75,7 +75,7 @@ test('a steep side angle is never a confident wrong driveway number', async () =
   });
   if (r.ok) {
     const off = Math.abs(r.surface.sqft - 432) / 432;
-    assert.ok(r.confidence !== 'good' || off < 0.2, `${r.surface.sqft} marked good`);
+    assert.ok(r.confidence === 'low' || off < 0.2, `${r.surface.sqft} marked good`);
     if (r.confidence === 'low') assert.match(r.ask, /straight on/);
   }
 });
