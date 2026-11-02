@@ -692,4 +692,4 @@ fetch('/api/health').then((r) => r.json()).then((h) => {
   if (h.relay === 'direct') $('privacyRoute').textContent = 'Your photo(s) and message go from our server straight to Meta’s Muse Spark and SAM 3.1';
 }).catch(() => {});
 
-bubble('note', 'Text one photo and a question. Put a gift card, quarter, sheet of paper, soda can, or a door in the shot and it becomes the ruler. For a whole floor, leave one sheet of paper on it, send a photo from one doorway, then more from other doorways as asked (up to 4): each one is combined with the earlier ones.');
+bubble('note', 'Text one photo and a question. Put a gift card, quarter, sheet of paper, soda can, or a door in the shot and it becomes the ruler. Keep the ruler flat and fully visible. Windshield chip: hold a quarter flat beside the chip, not on it. Whole floor: put one sheet of paper down and never move it, then shoot from each doorway as asked (up to 4).');
