@@ -938,6 +938,13 @@ export function sealerNeeded(sqftHigh, surface = 'unknown') {
   return out;
 }
 
+// How much of box a lies inside box b (0 to 1).
+export function boxInside(a, b) {
+  const w = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1), h = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1);
+  const area = Math.max(1, (a.x2 - a.x1) * (a.y2 - a.y1));
+  return w > 0 && h > 0 ? (w * h) / area : 0;
+}
+
 // Driveway, patio, slab: SAM outlines the surface and the door; measure.js adds up real square feet
 // row by row using the door's height as the ruler and the surface's edges for the horizon.
 async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsFor, sam }) {
@@ -964,6 +971,10 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsF
   if (!surface) return finishErr(read, pipeline, `I couldn’t find the ${concepts[0]} in that photo. Stand at the street end so all of it is in the shot.`, null, overlay);
   if (!door) return finishErr(read, pipeline, `I need the ${front ? 'front door' : 'garage door'} in the shot as the ruler. Stand at the street end of the ${concepts[0]} so the ${front ? 'door' : 'garage door'} is at the far end, and send one more.`, null, overlay);
   if (!frame) return finishErr(read, pipeline, 'Couldn’t read the photo size; please send it again.', null, overlay);
+  // A ground surface never sits on a door. If SAM's "driveway" outline is mostly inside any door it found,
+  // it outlined the door, not the ground: refuse instead of measuring a door as a driveway.
+  const onDoor = (dSeg.objects || []).find((o) => o.box && surface.box && boxInside(surface.box, o.box) > 0.6);
+  if (onDoor) return finishErr(read, pipeline, `The outline for the ${concepts[0]} landed on the ${front ? 'door' : 'garage door'}, not on the ground, so I didn’t measure it. Stand at the street end, back far enough that the ground in front of the ${front ? 'door' : 'garage door'} is in the shot, and send it again.`, null, overlay);
   const hfovDeg = focal35 && focal35 > 8 && focal35 < 300 ? (2 * Math.atan(18 / focal35) * 180) / Math.PI : 69;
   const m = measureSurface({ surface, ref: door, refKind, frame, hfovDeg });
   pipeline.add({ model: 'first-answer math', step: `square feet against the ${R.label}`, result: { sqft: m.sqft, low: m.low, high: m.high, method: m.method, confidence: m.confidence, cameraHeightFt: m.cameraHeightFt } });

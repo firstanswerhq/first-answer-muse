@@ -96,3 +96,23 @@ test('every answer for a business carries job size, materials and a quote line w
   assert.match(r.business.quote, /\$X per sq ft \(set by the business\)/);
   assert.doesNotMatch(JSON.stringify(r.business), /\$\d/);
 });
+
+test('the "driveway" outline lands on a garage door: refused, never measured as a driveway', async () => {
+  const s = scene(TWO_CAR);
+  const door = parseSam(s.doorText);
+  const r = await measureAnything({
+    dataUrl: 'x', text: 'How big is my driveway? I need to know how much sealer to buy.',
+    deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door' }), { driveway: door, 'garage door': door }),
+  });
+  assert.equal(r.refused ?? r.ok === false, r.refused ?? true);
+  assert.notEqual(r.ok, true);
+  assert.match(r.ask, /landed on the garage door, not on the ground/);
+  assert.ok(!r.numbers?.length, 'no panel numbers on a refused answer');
+});
+
+test('boxInside: how much of one box lies inside another', async () => {
+  const { boxInside } = await import('../src/anything.js');
+  assert.equal(boxInside({ x1: 0, y1: 0, x2: 10, y2: 10 }, { x1: 0, y1: 0, x2: 20, y2: 20 }), 1);
+  assert.equal(boxInside({ x1: 0, y1: 0, x2: 10, y2: 10 }, { x1: 5, y1: 0, x2: 20, y2: 10 }), 0.5);
+  assert.equal(boxInside({ x1: 0, y1: 0, x2: 10, y2: 10 }, { x1: 30, y1: 30, x2: 40, y2: 40 }), 0);
+});
