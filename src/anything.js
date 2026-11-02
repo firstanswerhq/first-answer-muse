@@ -415,13 +415,15 @@ async function correctOnce({ r, chk, dataUrl, text, focal35, live, pipeline, sam
 // A pale sheet on a gray floor can come back from SAM with no outline for "sheet of paper"; try two other
 // plain wordings for the same thing (only when the first finds nothing) before giving up on the ruler.
 const PAPER_ALTS = ['white paper', 'rectangular white sheet'];
+// Clear glass on a dark dashboard is hard for SAM to outline as a "chip"; other plain wordings for the same
+// damage are tried (one at a time, only while nothing is found).
+const GLASS_ALTS = ['star-shaped crack in glass', 'small crack in windshield', 'damaged spot on glass'];
+export const CONCEPT_ALTS = { 'sheet of paper': PAPER_ALTS, chip: GLASS_ALTS, crack: GLASS_ALTS };
 export async function segmentWithAlts(live, dataUrl, concept) {
   let seg = await live.segment(dataUrl, concept);
-  if (concept === 'sheet of paper') {
-    for (const alt of PAPER_ALTS) {
-      if ((seg.objects || []).length) break;
-      try { const s2 = await live.segment(dataUrl, alt); if ((s2.objects || []).length) seg = s2; } catch { /* keep the empty result */ }
-    }
+  for (const alt of CONCEPT_ALTS[concept] || []) {
+    if ((seg.objects || []).length) break;
+    try { const s2 = await live.segment(dataUrl, alt); if ((s2.objects || []).length) seg = s2; } catch { /* keep the empty result */ }
   }
   return seg;
 }
@@ -692,7 +694,7 @@ export function tileAnswer({ read, roomW, roomL, plusMinusPct, confidence, notes
   base.pipeline.add({ model: 'first-answer math', step: 'tile layout and cut list', result: { buyTiles, cuts: p.cuts?.length, ...(open ? { openFloorSqft: sqft } : {}) } });
   const room = `${ftIn(roomW / 12)} by ${ftIn(roomL / 12)}`;
   const first = open
-    ? `Combined from ${photos} photos: the room is about ${room}; the floor to tile is ${sqft} sq ft (the floor isn’t a plain rectangle: a vanity, tub or toilet takes up part of it).`
+    ? `Combined from ${photos} photos: the room is about ${room}; the floor to tile is ${sqft} sq ft (the floor isn’t a plain rectangle, so only the floor itself is counted).`
     : photos > 1 ? `Combined from ${photos} photos: the floor is about ${room} (${sqft} sq ft).` : `The floor is about ${room} (${sqft} sq ft).`;
   const next = photos > 1 ? ` ${photos < MAX_PHOTOS ? NEXT_OR_SEND : AT_LIMIT}` : '';
   return finish({

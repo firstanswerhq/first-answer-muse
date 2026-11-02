@@ -16,7 +16,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 // (label line, then the message). Face is off unless the server turns it on (SIGHT_FACE=1) and lists a
 // face sample; then it comes last.
 const SAMPLES = [
-  { id: 'tile', label: 'Tile floor', text: 'How much tile do I need for this floor? There is a sheet of paper on it for scale.' },
+  { id: 'tile', label: 'Tile floor', text: 'How many 12 inch tiles do I need for this elevator floor? I left a sheet of printer paper on it.' },
   { id: 'windshield', label: 'Windshield chip', text: 'Repair or replace this chip? I put a quarter next to it.' },
   { id: 'shoe', label: 'Shoe size', text: 'What shoe size am I? My foot is on a sheet of paper.' },
   { id: 'shed', label: 'Shed fit', text: 'Will a 12 ft wide shed fit between my fence and the house?' },

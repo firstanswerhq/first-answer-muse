@@ -195,7 +195,7 @@ test('a floor that is not a plain rectangle (a vanity takes a bite) combines, wi
   const sqft = parseFloat(r.numbers.find((n) => n.label === 'Floor to tile').value);
   near(sqft, openSqft, 0.1, 'open floor');
   assert.ok(sqft < 3000 * 2200 / 92903.04 * 0.95, 'less than the rectangle');
-  assert.match(r.answer, /^Combined from 2 photos: the room is about 7 ft(?: \d+ in)? by 9 ft(?: \d+ in)?; the floor to tile is [\d.]+ sq ft \(the floor isn’t a plain rectangle: a vanity, tub or toilet takes up part of it\)\. In 12 × 12 in tile/);
+  assert.match(r.answer, /^Combined from 2 photos: the room is about 7 ft(?: \d+ in)? by 9 ft(?: \d+ in)?; the floor to tile is [\d.]+ sq ft \(the floor isn’t a plain rectangle, so only the floor itself is counted\)\. In 12 × 12 in tile/);
   assert.ok(r.steps.some((x) => /cut list is for the open floor/.test(x)));
   // Tiles laid agree with the cut list: the plan's count (full tiles + one per cut piece) scaled by the open share.
   const laid = Number(r.answer.match(/that’s (\d+) tiles laid/)[1]);
