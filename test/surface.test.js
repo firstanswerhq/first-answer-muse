@@ -2,7 +2,7 @@
 // garage door as the ruler, never to the flat "size" path that would read the door as a sheet of paper.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { measureAnything, guessFromText, sealerNeeded } from '../src/anything.js';
+import { measureAnything, guessFromText, sealerNeeded, SEALER } from '../src/anything.js';
 import { parseSam } from '../src/muse.js';
 import { scene } from './scene.js';
 
@@ -40,7 +40,7 @@ test('the Driveway chip: Spark says "size", the text says driveway: measured in 
   assert.ok(r.surface.low <= 432 && r.surface.high >= 432, 'range covers the truth');
   assert.match(r.numbers.find((n) => n.label === 'Range').value, /^\d[\d,]* – \d[\d,]* sq ft$/);
   // Sealer is bought for the high end of the range.
-  const gallons = Math.ceil(r.surface.high / 200);
+  const gallons = Math.ceil(r.surface.high / SEALER.concrete.perGallon);
   assert.equal(r.numbers.find((n) => n.label === 'Concrete sealer').value, `${gallons} gallons per coat`);
   assert.ok(r.shopping.some((s) => /Asphalt sealer: \d+ five-gallon pails/.test(s)));
   assert.equal(r.overlay.outlines.length, 2);
@@ -106,7 +106,7 @@ test('the "driveway" outline lands on a garage door: refused, never measured as 
   });
   assert.equal(r.refused ?? r.ok === false, r.refused ?? true);
   assert.notEqual(r.ok, true);
-  assert.match(r.ask, /landed on the garage door, not on the ground/);
+  assert.match(r.ask, /ended up on the garage door instead of the ground, so I held off on a number\. Step back so the ground in front of the garage door/);
   assert.ok(!r.numbers?.length, 'no panel numbers on a refused answer');
 });
 
@@ -146,8 +146,8 @@ test('the door-overlap refusal is translated for a Spanish customer', async () =
     deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door', language: 'es' }), { driveway: door, 'garage door': door }),
   });
   assert.notEqual(r.ok, true);
-  assert.match(r.ask, /El contorno de la entrada cayó sobre la puerta del garaje/);
-  assert.doesNotMatch(r.ask, /landed on/);
+  assert.match(r.ask, /Mi contorno de la entrada quedó sobre la puerta del garaje en vez del suelo/);
+  assert.doesNotMatch(r.ask, /ended up on/);
 });
 
 // Real tape results (Nov 3, 2026): "stoop" got SAM 0 outlines while "concrete slab in front of the door" worked.
@@ -160,10 +160,34 @@ test('stoop, porch, steps and landing are asked of SAM as "concrete slab" (surfa
     });
     assert.equal(r.ok, true, `${word}: ${r.ask}`);
     assert.ok(asked.includes('front door') && asked.includes('concrete slab') && !asked.includes(word), `${word}: asked ${asked}`);
-    assert.match(r.answer, new RegExp(`^Your ${word} is roughly`), word);
+    assert.match(r.answer, new RegExp(`^Your ${word} is about`), word);
   }
   assert.equal(guessFromText('how big is my front stoop, for sealer').task, 'surface_area');
   assert.equal(guessFromText('how big is my porch').task, 'surface_area');
+  assert.equal(guessFromText('how many sq ft is the landing').task, 'surface_area');
+  assert.equal(guessFromText('how much sealer for the front steps').task, 'surface_area');
+  assert.notEqual(guessFromText('the cat stooped by the door, how big is this').task, 'surface_area');
+});
+
+test('porch, landing and steps never hijack a fit, gap, height, windshield or shoe question', async () => {
+  for (const [t, want] of [
+    ['Will a 6 ft shed fit between my porch and the fence?', 'gap_fit'],
+    ['What is the gap between the landing and the wall?', 'gap_fit'],
+    ['how tall is the porch roof', 'height'],
+    ['what shoe size am I? my foot is on the porch', 'shoe_size'],
+    ['can this windshield chip be repaired? the car is parked by the porch', 'windshield_chip'],
+    ['how far is the porch from the street', 'distance'],
+    ['Will a bench fit by the stoop?', 'gap_fit'],
+  ]) assert.equal(guessFromText(t).task, want, t);
+  // the model said "size" with a porch target but the message is a fit question: not rerouted to square feet
+  const r = await measureAnything({ dataUrl: 'x', text: 'Will a 6 ft shed fit between my porch and the fence?', deps: deps(R({ task: 'size', target: 'porch', ruler: 'card' }), {}) });
+  assert.notEqual(r.task, 'surface_area');
+});
+
+test('a stairs mention in a driveway question does not swap the garage door for the front door', async () => {
+  const asked = [];
+  await measureAnything({ dataUrl: 'x', text: 'How big is my driveway? 3 steps lead up to the porch', deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door' }), driveway(TWO_CAR), asked) });
+  assert.deepEqual(asked.sort(), ['driveway', 'garage door']);
 });
 
 test('a stoop with no outline for "concrete slab" tries the alternates one at a time, then gives up cleanly', async () => {
@@ -193,11 +217,19 @@ test('the surface range is wide enough to hold both real driveway results (one r
   assert.ok(sqft / 1.32 >= low, 'holds a number that read 32% high'); // 340 vs 257.9
   assert.ok(sqft / 0.8 <= high, 'holds a number that read 20% low');
   assert.equal(r.confidence, 'fair');
-  assert.match(r.answer, /roughly [\d,]+ sq ft/);
-  assert.match(r.answer, /one photo can miss by a third either way/);
+  assert.match(r.answer, /^Your driveway is about [\d,]+ sq ft/);
+  assert.match(r.answer, /A single photo can be off by up to a third, so plan on somewhere between [\d,]+ and [\d,]+ sq ft until you tape it\. \(Measured against the/);
   assert.match(r.headline, /^Roughly /);
   assert.doesNotMatch(r.answer, /\bexactly\b|\bmeasured to\b/i);
   // sealer is still bought for the high end only
-  assert.equal(r.numbers.find((n) => n.label === 'Concrete sealer').value, `${Math.ceil(high / 200)} gallons per coat`);
+  assert.equal(r.numbers.find((n) => n.label === 'Concrete sealer').value, `${Math.ceil(high / SEALER.concrete.perGallon)} gallons per coat`);
   assert.ok(r.steps[0].startsWith('Tape the width and length once'));
+});
+
+test('the page labels a surface estimate "Rough estimate" (English and Spanish), not "Close estimate"', async () => {
+  const { readFileSync } = await import('node:fs');
+  const js = readFileSync(new URL('../public/measure.js', import.meta.url), 'utf8');
+  assert.match(js, /surfaceFair: 'Rough estimate'/);
+  assert.match(js, /surfaceFair: 'Estimado aproximado'/);
+  assert.match(js, /r\.task === 'surface_area' && r\.confidence === 'fair' \? T\.surfaceFair/);
 });

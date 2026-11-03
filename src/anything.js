@@ -78,7 +78,19 @@ export function coinFromText(t) {
 }
 
 // Outdoor ground surfaces measured in square feet with a door as the ruler.
-const SURFACE_WORDS = /driveway|patio|concrete|slab|walkway|sidewalk|blacktop|asphalt|sealer|seal ?coat|pool deck|parking pad|stoop|porch|landing|front steps/;
+const SURFACE_STRONG = /driveway|patio|concrete|slab|walkway|sidewalk|blacktop|asphalt|sealer|seal ?coat|pool deck|parking pad/;
+// Looser words: "stoop" and "front steps" always mean a slab to size; "porch" and "landing" only with a size or area cue,
+// and none of them ever override a message that is plainly about fit, a gap, a windshield, a shoe, a height or a distance.
+const SURFACE_WEAK = /\bstoop\b|\bfront steps\b/;
+const SURFACE_PORCH = /\b(?:porch|landing)\b/;
+const SURFACE_CUE = /how big|sq\.? ?ft|square|sealer|concrete|how much/;
+const NOT_SURFACE = /\bfit\b|between|windshield|chip|\bshoes?\b|how tall|how far|\bheight\b|distance/;
+export const looksLikeSurface = (t, target = t) => {
+  const tl = String(t).toLowerCase(), tg = String(target).toLowerCase();
+  if (SURFACE_STRONG.test(tg)) return true;
+  if (NOT_SURFACE.test(tl)) return false;
+  return SURFACE_WEAK.test(tg) || (SURFACE_PORCH.test(tg) && SURFACE_CUE.test(tl));
+};
 // SAM returns nothing for "stoop" (real test, Nov 3) but outlines "concrete slab in front of the door" fine, so
 // these words are asked of SAM as "concrete slab" (surface jobs only); the person's own word stays in the answer.
 const STOOP_WORDS = /\b(?:stoop|porch|steps?|landing)\b/;
@@ -98,7 +110,7 @@ export function guessFromText(text = '') {
   const notFace = /face ?mask|face ?shield|face ?plate|face ?frame|eye ?bolt|thermometer|eye[- ]level|eye height|from (?:the |my )?(?:monitor|screen|face)/.test(t);
   if (!notFace && (/\b(?:my|your|her|his|their|kid'?s|son'?s|daughter'?s)\s+(?:face|eyes?|forehead|pupils?|pd|nose|mouth)\b|between (?:my |the |your |her |his )?eyes|eye (?:spacing|distance)|\bpupils?\b|pupillary|\bipd\b|p\.d\.|\bpd measurement|face symmetr|^\s*(?:measure|what(?:'s| is))\s+my\s+pd\b/.test(t)
     || /symmetr/.test(t) && /\b(?:my|your) (?:face|eyes)\b/.test(t))) task = 'face';
-  else if (SURFACE_WORDS.test(t) && !/\btiles?\b|tiling/.test(t)) task = 'surface_area';
+  else if (looksLikeSurface(t) && !/\btiles?\b|tiling/.test(t)) task = 'surface_area';
   else if (/shoe|\bfoot\b(?! ?print)|feet size|what size am i/.test(t) && !/square (?:foot|feet)|sq\.? ?f(?:ee)?t/.test(t)) task = 'shoe_size';
   else if (/windshield|chip|crack in (?:the )?glass|repair or replace/.test(t)) task = 'windshield_chip';
   else if (/tile|floor/.test(t)) task = 'floor_tile';
@@ -485,14 +497,14 @@ async function readTask({ dataUrl, text, live, pipeline }) {
   if (guess.tile_w_in) { read.tile_w_in = guess.tile_w_in; read.tile_l_in = guess.tile_l_in; }
   if (guess.coin) read.ruler = guess.coin; // "it's a quarter" corrects the coin
   // A driveway, patio or slab is square feet against a door, whatever the model filed it under.
-  if (read.task !== 'surface_area' && read.task !== 'face' && (guess.task === 'surface_area' || (read.task === 'size' && SURFACE_WORDS.test(String(read.target).toLowerCase())))) {
+  if (read.task !== 'surface_area' && read.task !== 'face' && (guess.task === 'surface_area' || (read.task === 'size' && looksLikeSurface(text, read.target)))) {
     if (live) pipeline.add({ model: 'first-answer math', step: 'routed by the message to square feet', result: { from: read.task, to: 'surface area' } });
     read.task = 'surface_area';
-    if (!SURFACE_WORDS.test(String(read.target).toLowerCase())) read.target = (String(text).toLowerCase().match(/driveway|patio|stoop|porch|landing|walkway|sidewalk|slab|pool deck|parking pad/) || ['driveway'])[0];
+    if (!looksLikeSurface(text, read.target)) read.target = (String(text).toLowerCase().match(/driveway|patio|stoop|porch|landing|walkway|sidewalk|slab|pool deck|parking pad/) || ['driveway'])[0];
   }
   if (read.task === 'surface_area' && !SURFACE_REFERENCES[read.ruler]) read.ruler = 'double_garage_door';
   // A stoop or porch leads to the front door, not a garage, unless the message mentions the garage.
-  if (read.task === 'surface_area' && read.ruler === 'double_garage_door' && STOOP_WORDS.test(`${read.target} ${text}`.toLowerCase()) && !/garage/i.test(text)) read.ruler = 'front_door';
+  if (read.task === 'surface_area' && read.ruler === 'double_garage_door' && STOOP_WORDS.test(String(read.target).toLowerCase()) && !/garage/i.test(text)) read.ruler = 'front_door';
   if (read.ruler === 'none') read.ruler = DEFAULT_RULER[read.task];
 
   // Face measuring is off unless SIGHT_FACE=1 (the code stays; the demo is about jobs for a business).
@@ -544,7 +556,7 @@ async function measureFrom({ dataUrl, text, focal35, live, pipeline, read, segsF
       const g = gapBetween(target, other, cal, frame);
       pipeline.add({ model: 'first-answer math', step: 'measure the gap', result: g });
       if (!g.ok) return finishErr(read, pipeline, `I couldn’t see where both sides meet the ground. ${g.reason}.`, null, overlay);
-      if (g.depthwise) return finishErr(read, pipeline, `This gap runs toward the camera, and one photo can’t measure a distance in that direction: a real one read about a third of its true width. I didn’t give a number. Stand at one end of the gap and take the photo looking straight across it, or just tape it.`, null, overlay);
+      if (g.depthwise) return finishErr(read, pipeline, `This gap runs toward the camera, and one photo can’t judge distance in that direction, so I’m not going to guess a number. Stand at one end of the gap and look down its length, so both sides run away from you, or tape it.`, null, overlay);
       const itemFt = read.item_width_in ? read.item_width_in / 12 : null;
       const fit = itemFt ? fitCheck({ gap: g.tightest, itemFt }) : null;
       return finish({
@@ -988,7 +1000,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsF
   // A ground surface never sits on a door. If SAM's "driveway" outline is mostly inside any door it found,
   // it outlined the door, not the ground: refuse instead of measuring a door as a driveway.
   const onDoor = (dSeg.objects || []).find((o) => o.box && surface.box && (o === door || (o.c ?? 1) >= 0.5) && boxInside(surface.box, o.box) > 0.6);
-  if (onDoor) return finishErr(read, pipeline, `The outline for the ${concepts[0]} landed on the ${front ? 'door' : 'garage door'}, not on the ground, so I didn’t measure it. Stand at the street end, back far enough that the ground in front of the ${front ? 'door' : 'garage door'} is in the shot, and send it again.`, null, overlay);
+  if (onDoor) return finishErr(read, pipeline, `My outline of the ${concepts[0]} ended up on the ${front ? 'front door' : 'garage door'} instead of the ground, so I held off on a number. Step back so the ground in front of the ${front ? 'door' : 'garage door'} is in the shot, and send it again.`, null, overlay);
   const hfovDeg = focal35 && focal35 > 8 && focal35 < 300 ? (2 * Math.atan(18 / focal35) * 180) / Math.PI : 69;
   const m = measureSurface({ surface, ref: door, refKind, frame, hfovDeg });
   pipeline.add({ model: 'first-answer math', step: `square feet against the ${R.label}`, result: { sqft: m.sqft, low: m.low, high: m.high, method: m.method, confidence: m.confidence, cameraHeightFt: m.cameraHeightFt } });
@@ -997,8 +1009,8 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsF
   const kind = /asphalt|blacktop/.test(t) ? 'asphalt' : /concrete|slab|cement/.test(t) ? 'concrete' : 'unknown';
   const seal = sealerNeeded(m.high, kind);
   const fmt = (n) => n.toLocaleString('en-US');
-  const sizeWords = m.widthFt && m.lengthFt ? ` (roughly ${m.widthFt} ft wide by ${m.lengthFt} ft long)` : '';
-  const answer = `Your ${concepts[0]} is roughly ${fmt(m.sqft)} sq ft${sizeWords}, but one photo can miss by a third either way, so it could be anywhere from ${fmt(m.low)} to ${fmt(m.high)} sq ft. Measured against the ${R.label}. ${seal.length === 1 ? `Buy ${seal[0].qty} ${seal[0].qty === 1 ? seal[0].unit : `${seal[0].unit}s`} of ${seal[0].kind} sealer per coat.` : `That’s ${seal[0].qty} ${seal[0].qty === 1 ? 'gallon' : 'gallons'} of concrete sealer or ${seal[1].qty} ${seal[1].qty === 1 ? 'five-gallon pail' : 'five-gallon pails'} of asphalt sealer per coat.`}`;
+  const sizeWords = m.widthFt && m.lengthFt ? ` (about ${m.widthFt} ft wide by ${m.lengthFt} ft long)` : '';
+  const answer = `Your ${concepts[0]} is about ${fmt(m.sqft)} sq ft${sizeWords}. A single photo can be off by up to a third, so plan on somewhere between ${fmt(m.low)} and ${fmt(m.high)} sq ft until you tape it. (Measured against the ${R.label}.) ${seal.length === 1 ? `Buy ${seal[0].qty} ${seal[0].qty === 1 ? seal[0].unit : `${seal[0].unit}s`} of ${seal[0].kind} sealer per coat.` : `That’s ${seal[0].qty} ${seal[0].qty === 1 ? 'gallon' : 'gallons'} of concrete sealer or ${seal[1].qty} ${seal[1].qty === 1 ? 'five-gallon pail' : 'five-gallon pails'} of asphalt sealer per coat.`}`;
   return finish({
     task: 'surface_area', read, overlay, pipeline, measuredAgainst: rulerSpec(refKind),
     headline: `Roughly ${fmt(m.sqft)} sq ft`,
@@ -1014,7 +1026,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsF
       ...(m.widthFt && m.lengthFt ? [{ label: 'Size', value: `${m.widthFt} × ${m.lengthFt} ft` }] : []),
       ...seal.map((x) => ({ label: x.kind === 'concrete' ? 'Concrete sealer' : 'Asphalt sealer', value: `${x.qty} ${x.qty === 1 ? x.unit : `${x.unit}s`} per coat` })),
     ],
-    shopping: [...seal.map((x) => x.text), 'Buy for the high end of the range; return unopened extras'],
+    shopping: [...seal.map((x) => x.text), 'Buy for the high end of the range, or tape it first and buy for that; return unopened extras'],
     steps: ['Tape the width and length once before you order: a photo estimate can be off by a third.', 'Clean it first: pressure wash and let it dry 24 hours.', 'Check the forecast: no rain for 24–48 hours, above 50°F.', 'Two thin coats beat one thick one; the second coat needs the same amount again.'],
     confidence: m.confidence === 'good' ? 'fair' : m.confidence, // a driveway is never "Measured": real driveways read 15-20% low and 32% high
     ask: m.confidence === 'low' ? `Rough number: for a tighter one, stand at the street end, straight on, phone at chest height, with the whole ${concepts[0]} and the ${front ? 'door' : 'garage door'} in the shot.` : (m.clipped ? `Part of the ${concepts[0]} runs out of the photo; the edges were carried on, so check that end with a tape.` : null),

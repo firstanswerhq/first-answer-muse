@@ -309,7 +309,7 @@ const UI = {
     phone: 'Your phone (optional)', phoneLabel: 'Your phone number, optional, so they can text you back', send: (to) => `Send this to ${to}`, sending: 'Sending…', seeBoard: (o) => `See ${o}’s board`, sendFail: 'Couldn’t send it just now. Try again in a moment.',
     panel: 'How Meta’s models measured it', fixed: ['corrected SAM’s outline →', 'outlined it again → re-measured'], photo: 'Photo',
     photosIn: (n) => `${n} photo${n === 1 ? '' : 's'} of this floor so far.`, noPhotos: 'No usable photo of this floor yet.', nextPhoto: 'Tap the camera for the next one; it joins these.', nextSample: 'Send the next sample photo', startOver: 'Start over', startedOver: 'Started over: the next photo begins a new floor.', notUsed: 'not used', atLimit: 'That’s the limit of 4 photos; tap Send to the business, or Start over.',
-    conf: { good: 'Measured', fair: 'Close estimate', low: 'Rough — see tip' },
+    conf: { good: 'Measured', fair: 'Close estimate', low: 'Rough — see tip' }, surfaceFair: 'Rough estimate',
   },
   es: {
     ruler: 'referencia', agreed: 'Muse Spark revisó estos contornos y está de acuerdo', disagreed: 'Muse Spark revisó estos contornos y no estuvo de acuerdo, así que no se midió nada', skipped: 'La revisión de Muse Spark no llegó a tiempo, así que se midió sin ella', corrected: 'Muse Spark no estuvo de acuerdo con el primer contorno de SAM, le dijo qué buscar y está de acuerdo con el nuevo (medido otra vez)', correctedBad: 'Muse Spark corrigió a SAM una vez y siguió sin estar de acuerdo, así que no se midió nada',
@@ -320,7 +320,7 @@ const UI = {
     phone: 'Tu teléfono (opcional)', phoneLabel: 'Tu número de teléfono, opcional, para que te escriban', send: (to) => `Enviar a ${to}`, sending: 'Enviando…', seeBoard: (o) => `Ver el tablero de ${o}`, sendFail: 'No se pudo enviar. Inténtalo de nuevo en un momento.',
     panel: 'Cómo lo midieron los modelos de Meta', fixed: ['corrigió el contorno de SAM →', 'lo marcó otra vez → medido de nuevo'], photo: 'Foto',
     photosIn: (n) => `${n} foto${n === 1 ? '' : 's'} de este piso por ahora.`, noPhotos: 'Todavía no hay una foto útil de este piso.', nextPhoto: 'Toca la cámara para la siguiente; se suma a estas.', nextSample: 'Mandar la siguiente foto de muestra', startOver: 'Empezar de nuevo', startedOver: 'Empezamos de nuevo: la siguiente foto empieza otro piso.', notUsed: 'no se usó', atLimit: 'Ese es el límite de 4 fotos; toca Enviar al negocio, o Empezar de nuevo.',
-    conf: { good: 'Medido', fair: 'Estimado cercano', low: 'Aproximado: ve el consejo' },
+    conf: { good: 'Medido', fair: 'Estimado cercano', low: 'Aproximado: ve el consejo' }, surfaceFair: 'Estimado aproximado',
   },
 };
 const L = (r) => UI[r?.lang === 'es' ? 'es' : 'en'];
@@ -365,7 +365,8 @@ function renderReply(r, dataUrl, dataUrls = [dataUrl]) {
   const body = document.createElement('div');
   body.className = 'r-body';
   const T = L(r);
-  const conf = CONF[r.confidence] && [CONF[r.confidence][0], T.conf[r.confidence]];
+  // A surface (driveway, stoop) estimate carries a ±35% range, so its middle label is "Rough estimate", not "Close estimate".
+  const conf = CONF[r.confidence] && [CONF[r.confidence][0], r.task === 'surface_area' && r.confidence === 'fair' ? T.surfaceFair : T.conf[r.confidence]];
   const nums = (r.numbers || []).filter((n) => n && (n.label || n.value != null));
   const shopping = (r.shopping || []).filter(Boolean);
   const steps = (r.steps || []).filter(Boolean);

@@ -63,6 +63,23 @@ test('a floor with a sheet of paper on it gives a tile count and a cut list', as
   assert.ok(r.shopping.length >= 3 && r.steps.some((s) => /cut each tile/.test(s)));
 });
 
+test('a gap that runs toward the camera is refused with a retake tip, never a number (English and Spanish)', async () => {
+  const cam = camera3d({ pitchDeg: 12 });
+  const { objects } = render(cam, [
+    { name: 'fence', axis: 'z', at: 28, from: -9, to: 9, top: 6 },
+    { name: 'house', axis: 'z', at: 20, from: -6, to: 6, top: 0.5 },
+    { name: 'door', axis: 'z', at: 40, from: -1.5, to: 1.5, top: 80 / 12 },
+  ]);
+  const seg = (o) => ({ objects: [o], frame: { w: cam.W, h: cam.H } });
+  const byConcept = { fence: seg(objects.fence), 'house wall': seg(objects.house), door: seg(objects.door) };
+  const r = await measureAnything({ dataUrl: 'x', text: 'How wide is the gap from the house to the fence?', deps: deps(R({ task: 'gap_fit', target: 'fence', second_target: 'house wall', ruler: 'interior_door' }), byConcept) });
+  assert.equal(r.ok, false);
+  assert.ok(!r.numbers?.length && !r.headline);
+  assert.match(r.ask, /look down its length, so both sides run away from you, or tape it\./);
+  const es = await measureAnything({ dataUrl: 'x', text: '¿Cuánto mide el espacio entre la casa y la cerca?', deps: deps(R({ task: 'gap_fit', target: 'fence', second_target: 'house wall', ruler: 'interior_door', language: 'es' }), byConcept) });
+  assert.match(es.ask, /Párate en un extremo del espacio y mira a lo largo, de modo que los dos lados se alejen de ti, o mídelo con cinta\./);
+});
+
 test('will a 12 ft shed fit between the fence and the house? (13.5 ft gap)', async () => {
   const cam = camera3d({ pitchDeg: 12 });
   const { objects } = render(cam, [

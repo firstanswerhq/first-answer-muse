@@ -353,23 +353,25 @@ export function gapBetween(objA, objB, cal, frame) {
     if (ga.length < 4 || gb.length < 4) return null;
     const lineB = robustLine(gb.map((g) => [g.X, g.Z]), 0.25);
     if (!lineB) return null;
-    const zMin = Math.min(...gb.map((g) => g.Z)), zMax = Math.max(...gb.map((g) => g.Z));
     const nB = [-lineB.d[1], lineB.d[0]];
+    // The far edge runs ACROSS the view (its normal points along the view direction): the gap is measured toward the
+    // camera, where one pixel is many inches. Decided before the overlap filter so it cannot be skipped.
+    if (Math.abs(nB[1]) > 0.7) return { depthShare: Math.abs(nB[1]) };
+    const zMin = Math.min(...gb.map((g) => g.Z)), zMax = Math.max(...gb.map((g) => g.Z));
     const ds = ga.filter((g) => g.Z >= zMin && g.Z <= zMax).map((g) => Math.abs((g.X - lineB.p[0]) * nB[0] + (g.Z - lineB.p[1]) * nB[1]));
     if (ds.length < 3) return null;
     return { tight: quantile(ds, 0.05), typical: quantile(ds, 0.5), alongFt: zMax - zMin, depthShare: Math.abs(nB[1]) };
   };
   const p = one(cal.primary);
   if (!p) return { ok: false, reason: 'the two don’t overlap from this angle' };
+  if (p.depthShare > 0.7) return { ok: true, depthwise: true, confidence: cal.confidence }; // the flow refuses: no number toward the camera
   const all = cal.cameras.map(one).filter(Boolean);
   return {
     ok: true,
     tightest: spread(all.map((x) => x.tight), p.tight),
     typical: spread(all.map((x) => x.typical), p.typical),
     overFt: p.alongFt,
-    // The far side's edge runs ACROSS the view, so the gap is measured toward/away from the camera. A pixel of error
-    // there is many inches (a real 98.5 in gap read about 32 in, Nov 3), and one photo can't tell: flagged so the flow refuses.
-    depthwise: p.depthShare > 0.7,
+    depthwise: false,
     confidence: cal.confidence,
   };
 }

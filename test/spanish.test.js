@@ -58,7 +58,7 @@ test('spot checks of the Spanish wording', async () => {
   assert.match(chip.measuredAgainst, /^moneda de un cuarto de dólar \(24\.26 mm\)$/);
   const drive = await run(...s.driveway);
   assert.match(drive.headline, /^Aproximadamente [\d,]+ pies cuadrados$/);
-  assert.match(drive.answer, /^Tu entrada mide aproximadamente [\d,]+ pies cuadrados/);
+  assert.match(drive.answer, /^Tu entrada mide unos [\d,]+ pies cuadrados.*hasta que la midas con cinta/);
   const shoe = await run(...s.shoe);
   assert.match(shoe.headline, /^Talla [\d.]+ de hombre$/);
   assert.ok(shoe.steps.some((x) => /Nike/.test(x) && /talla más/.test(x)));
