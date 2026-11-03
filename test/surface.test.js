@@ -91,7 +91,7 @@ test('every answer for a business carries job size, materials and a quote line w
     dataUrl: 'x', text: 'how big is my driveway',
     deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door' }), driveway(TWO_CAR)),
   });
-  assert.match(r.business.job, /^Driveway: about [\d,]+ sq ft/);
+  assert.match(r.business.job, /^Driveway: roughly [\d,]+ sq ft/);
   assert.ok(r.business.materials.length >= 1);
   assert.match(r.business.quote, /\$X per sq ft \(set by the business\)/);
   assert.doesNotMatch(JSON.stringify(r.business), /\$\d/);
@@ -148,4 +148,56 @@ test('the door-overlap refusal is translated for a Spanish customer', async () =
   assert.notEqual(r.ok, true);
   assert.match(r.ask, /El contorno de la entrada cayó sobre la puerta del garaje/);
   assert.doesNotMatch(r.ask, /landed on/);
+});
+
+// Real tape results (Nov 3, 2026): "stoop" got SAM 0 outlines while "concrete slab in front of the door" worked.
+test('stoop, porch, steps and landing are asked of SAM as "concrete slab" (surface jobs only); the person\'s word stays', async () => {
+  for (const word of ['stoop', 'porch', 'steps', 'landing']) {
+    const asked = [];
+    const r = await measureAnything({
+      dataUrl: 'x', text: `How big is my ${word}?`,
+      deps: deps(R({ task: 'surface_area', target: word, ruler: 'double_garage_door' }), { 'concrete slab': driveway(TWO_CAR).driveway, 'front door': driveway(TWO_CAR)['garage door'] }, asked),
+    });
+    assert.equal(r.ok, true, `${word}: ${r.ask}`);
+    assert.ok(asked.includes('front door') && asked.includes('concrete slab') && !asked.includes(word), `${word}: asked ${asked}`);
+    assert.match(r.answer, new RegExp(`^Your ${word} is roughly`), word);
+  }
+  assert.equal(guessFromText('how big is my front stoop, for sealer').task, 'surface_area');
+  assert.equal(guessFromText('how big is my porch').task, 'surface_area');
+});
+
+test('a stoop with no outline for "concrete slab" tries the alternates one at a time, then gives up cleanly', async () => {
+  const asked = [];
+  const s = driveway(TWO_CAR);
+  const r = await measureAnything({
+    dataUrl: 'x', text: 'how big is my stoop',
+    deps: deps(R({ task: 'surface_area', target: 'stoop', ruler: 'double_garage_door' }), { 'concrete pad': s.driveway, 'front door': s['garage door'] }, asked),
+  });
+  assert.equal(r.ok, true, r.ask);
+  assert.deepEqual(asked.filter((c) => c !== 'front door'), ['concrete slab', 'concrete pad']);
+  const none = []; // nothing found by any wording: a plain retake, not a number
+  const r2 = await measureAnything({ dataUrl: 'x', text: 'how big is my stoop', deps: deps(R({ task: 'surface_area', target: 'stoop', ruler: 'double_garage_door' }), { 'front door': s['garage door'] }, none) });
+  assert.equal(r2.ok, false);
+  assert.deepEqual(none.filter((c) => c !== 'front door'), ['concrete slab', 'concrete pad', 'concrete step', 'porch floor']);
+  // the alternates are for surface jobs only: a windshield "crack" never becomes a concrete slab
+  assert.ok(!none.includes('stoop'));
+});
+
+test('the surface range is wide enough to hold both real driveway results (one read 15-20% low, one 32% high) and says so', async () => {
+  const r = await measureAnything({
+    dataUrl: 'x', text: 'How big is my driveway? I need to know how much sealer to buy.',
+    deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door' }), driveway(TWO_CAR)),
+  });
+  const { sqft, low, high } = r.surface;
+  assert.ok(low <= sqft * 0.68 && high >= sqft * 1.32, `range ${low}-${high} around ${sqft}`);
+  assert.ok(sqft / 1.32 >= low, 'holds a number that read 32% high'); // 340 vs 257.9
+  assert.ok(sqft / 0.8 <= high, 'holds a number that read 20% low');
+  assert.equal(r.confidence, 'fair');
+  assert.match(r.answer, /roughly [\d,]+ sq ft/);
+  assert.match(r.answer, /one photo can miss by a third either way/);
+  assert.match(r.headline, /^Roughly /);
+  assert.doesNotMatch(r.answer, /\bexactly\b|\bmeasured to\b/i);
+  // sealer is still bought for the high end only
+  assert.equal(r.numbers.find((n) => n.label === 'Concrete sealer').value, `${Math.ceil(high / 200)} gallons per coat`);
+  assert.ok(r.steps[0].startsWith('Tape the width and length once'));
 });

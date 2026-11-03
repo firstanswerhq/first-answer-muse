@@ -71,6 +71,7 @@ const EXACT = {
   'Grout and 1/8 in spacers': 'Lechada (grout) y separadores de 1/8 pulg.',
   'Tile cutter or wet saw': 'Cortadora de baldosas o sierra al agua',
   // steps
+  'Tape the width and length once before you order: a photo estimate can be off by a third.': 'Mide el ancho y el largo con cinta una vez antes de pedir: un cálculo con foto puede fallar por un tercio.',
   'Clean it first: pressure wash and let it dry 24 hours.': 'Primero límpiala: lávala a presión y déjala secar 24 horas.',
   'Check the forecast: no rain for 24–48 hours, above 50°F.': 'Revisa el pronóstico: sin lluvia por 24–48 horas y más de 50°F.',
   'Two thin coats beat one thick one; the second coat needs the same amount again.': 'Dos capas delgadas rinden más que una gruesa; la segunda capa lleva la misma cantidad otra vez.',
@@ -123,6 +124,7 @@ const PHRASES = [
 // Whole-sentence rules, tried in order: [pattern, (match) => Spanish].
 const RULES = [
   [/^About (.+) sq ft$/, (m) => `Unos ${m[1]} pies cuadrados`],
+  [/^Roughly (.+) sq ft$/, (m) => `Aproximadamente ${m[1]} pies cuadrados`],
   [/^Size (.+)$/, (m) => `Talla ${shoePick(m[1])}`],
   [/^(.+) at the narrowest$/, (m) => `${units(m[1])} en lo más angosto`],
   [/^Buy (\d+) tiles$/, (m) => `Compra ${m[1]} baldosas`],
@@ -130,8 +132,8 @@ const RULES = [
   [/^(\d+) tiles \(\+(\d+)%\)$/, (m) => `${m[1]} baldosas (+${m[2]}%)`],
   [/^(\d+) tiles \(\+(\d+)% for cuts\)$/, (m) => `${m[1]} baldosas (+${m[2]}% para cortes)`],
   // driveway
-  [/^Your ([\w ]+?) is about ([\d,]+) sq ft(?: \(about ([\d.]+) ft wide by ([\d.]+) ft long\))?, between ([\d,]+) and ([\d,]+) sq ft, measured against the (.+?)\. (.+)$/, (m) =>
-    `Tu ${bare(m[1])} mide unos ${m[2]} pies cuadrados${m[3] ? ` (unos ${m[3]} pies de ancho por ${m[4]} pies de largo)` : ''}, entre ${m[5]} y ${m[6]} pies cuadrados, tomando como referencia la ${RULER[m[7]] || m[7]}. ${es(m[8])}`],
+  [/^Your ([\w ]+?) is roughly ([\d,]+) sq ft(?: \(roughly ([\d.]+) ft wide by ([\d.]+) ft long\))?, but one photo can miss by a third either way, so it could be anywhere from ([\d,]+) to ([\d,]+) sq ft\. Measured against the (.+?)\. (.+)$/, (m) =>
+    `Tu ${bare(m[1])} mide aproximadamente ${m[2]} pies cuadrados${m[3] ? ` (unos ${m[3]} pies de ancho por ${m[4]} pies de largo)` : ''}, pero con una sola foto el error puede ser de un tercio en cualquier dirección, así que podría estar entre ${m[5]} y ${m[6]} pies cuadrados. Tomando como referencia la ${RULER[m[7]] || m[7]}. ${es(m[8])}`],
   [/^Buy (\d+) (gallons?|five-gallon pails?) of (concrete|asphalt) sealer per coat\.$/, (m) => `Compra ${gal(m[1], m[2])} de ${sealer(m[3])} por capa.`],
   [/^That’s (\d+) gallons? of concrete sealer or (\d+) five-gallon pails? of asphalt sealer per coat\.$/, (m) => `Son ${gal(m[1], 'gallons')} de sellador para concreto o ${gal(m[2], 'pails')} de sellador para asfalto por capa.`],
   [/^Concrete sealer: (\d+) gallons? per coat \(at about (\d+) sq ft per gallon; labels say (.+)\)$/, (m) => `Sellador para concreto: ${gal(m[1], 'gallons')} por capa (unos ${m[2]} pies cuadrados por galón; las etiquetas dicen ${m[3]})`],
@@ -185,6 +187,7 @@ const RULES = [
   [/^The outline for the (.+?) landed on the (door|garage door), not on the ground, so I didn’t measure it\. Stand at the street end, back far enough that the ground in front of the (?:door|garage door) is in the shot, and send it again\.$/, (m) =>
     `El contorno de ${noun(m[1])} cayó sobre ${noun(m[2])}, no sobre el suelo, así que no lo medí. Párate en el extremo de la calle, lo bastante lejos para que el suelo frente a ${noun(m[2])} salga en la foto, y mándala otra vez.`],
   [/^I couldn’t find the (.+?) in that photo\. (.+)$/, (m) => `No encontré ${noun(m[1])} en esa foto. Vuelve a intentarlo más cerca, con ${noun(m[1])} en el centro de la foto.`],
+  [/^This gap runs toward the camera, and one photo can’t measure a distance in that direction: a real one read about a third of its true width\. I didn’t give a number\. Stand at one end of the gap and take the photo looking straight across it, or just tape it\.$/, () => 'Este espacio va hacia la cámara, y una sola foto no puede medir una distancia en esa dirección: uno real salió en cerca de un tercio de su ancho verdadero. No di ningún número. Párate en un extremo del espacio y toma la foto mirando de lado a lado, o simplemente mídelo con cinta.'],
   [/^I found the (.+?) but not the (.+?)\. Step back so both are in the shot\.$/, (m) => `Encontré ${noun(m[1])} pero no ${noun(m[2])}. Aléjate un poco para que salgan los dos.`],
   [/^I need something of known size next to it: lay a (.+?) right beside it and send one more\.$/, (m) => `Necesito algo de tamaño conocido al lado: pon ${{ quarter: 'una moneda de un cuarto de dólar', 'gift card or a quarter': 'una tarjeta o una moneda de un cuarto de dólar', 'sheet of printer paper': 'una hoja de papel' }[m[1]] || m[1]} justo al lado y manda otra.`],
   [/^I need the (front door|garage door) in the shot as the ruler\..*$/, (m) => `Necesito ${noun(m[1])} en la foto como referencia. Párate en el lado de la calle para que ${noun(m[1])} quede al fondo, y manda otra.`],

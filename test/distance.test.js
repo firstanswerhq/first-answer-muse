@@ -100,3 +100,22 @@ test('the photo’s camera info is read when present, ignored when not', () => {
   const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe1]), len, app1, Buffer.from([0xff, 0xd9])]);
   assert.equal(readExif(jpg).focal35, 26);
 });
+
+// A gap measured toward the camera (a slab in front, a fence behind it, both edges running across the view):
+// one pixel of error is many inches there, and a real 98.5 in gap read about a third of that. It is flagged so
+// the answer refuses instead of giving a confident wrong number. A side yard (edges running away) is not.
+test('a gap that runs toward the camera gives no number (or is flagged depthwise); a side yard is still measured', () => {
+  const cam = camera3d({ pitchDeg: 12 });
+  const { frame, objects } = render(cam, [
+    { name: 'near', axis: 'z', at: 20, from: -6, to: 6, top: 0.5 },
+    { name: 'far', axis: 'z', at: 28, from: -6, to: 6, top: 6 },
+    { name: 'door', axis: 'z', at: 40, from: -1.5, to: 1.5, top: 80 / 12 },
+  ]);
+  const cal = calibrate({ frame, focal35: null, ref: objects.door, refKind: 'interior_door', groundLines: [contactPoints(objects.near, frame), contactPoints(objects.far, frame)] });
+  assert.equal(cal.ok, true);
+  const g = gapBetween(objects.near, objects.far, cal, frame);
+  assert.ok(!g.ok || g.depthwise === true, 'must be flagged or unmeasurable');
+  const yardGap = measureYard({ pitchDeg: 12 }).gap;
+  assert.equal(yardGap.ok, true);
+  assert.ok(!yardGap.depthwise);
+});

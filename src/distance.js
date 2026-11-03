@@ -357,7 +357,7 @@ export function gapBetween(objA, objB, cal, frame) {
     const nB = [-lineB.d[1], lineB.d[0]];
     const ds = ga.filter((g) => g.Z >= zMin && g.Z <= zMax).map((g) => Math.abs((g.X - lineB.p[0]) * nB[0] + (g.Z - lineB.p[1]) * nB[1]));
     if (ds.length < 3) return null;
-    return { tight: quantile(ds, 0.05), typical: quantile(ds, 0.5), alongFt: zMax - zMin };
+    return { tight: quantile(ds, 0.05), typical: quantile(ds, 0.5), alongFt: zMax - zMin, depthShare: Math.abs(nB[1]) };
   };
   const p = one(cal.primary);
   if (!p) return { ok: false, reason: 'the two don’t overlap from this angle' };
@@ -367,6 +367,9 @@ export function gapBetween(objA, objB, cal, frame) {
     tightest: spread(all.map((x) => x.tight), p.tight),
     typical: spread(all.map((x) => x.typical), p.typical),
     overFt: p.alongFt,
+    // The far side's edge runs ACROSS the view, so the gap is measured toward/away from the camera. A pixel of error
+    // there is many inches (a real 98.5 in gap read about 32 in, Nov 3), and one photo can't tell: flagged so the flow refuses.
+    depthwise: p.depthShare > 0.7,
     confidence: cal.confidence,
   };
 }
