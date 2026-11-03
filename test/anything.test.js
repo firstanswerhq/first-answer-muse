@@ -75,9 +75,9 @@ test('a gap that runs toward the camera is refused with a retake tip, never a nu
   const r = await measureAnything({ dataUrl: 'x', text: 'How wide is the gap from the house to the fence?', deps: deps(R({ task: 'gap_fit', target: 'fence', second_target: 'house wall', ruler: 'interior_door' }), byConcept) });
   assert.equal(r.ok, false);
   assert.ok(!r.numbers?.length && !r.headline);
-  assert.match(r.ask, /look down its length, so both sides run away from you, or tape it\./);
+  assert.match(r.ask, /point the camera along the gap, so both sides run away from you, or measure it with a tape\./);
   const es = await measureAnything({ dataUrl: 'x', text: '¿Cuánto mide el espacio entre la casa y la cerca?', deps: deps(R({ task: 'gap_fit', target: 'fence', second_target: 'house wall', ruler: 'interior_door', language: 'es' }), byConcept) });
-  assert.match(es.ask, /Párate en un extremo del espacio y mira a lo largo, de modo que los dos lados se alejen de ti, o mídelo con cinta\./);
+  assert.match(es.ask, /Colócate en un extremo y apunta la cámara a lo largo del espacio, de modo que los dos lados se alejen de ti, o mídelo con cinta\./);
 });
 
 test('will a 12 ft shed fit between the fence and the house? (13.5 ft gap)', async () => {

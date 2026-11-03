@@ -146,7 +146,7 @@ test('the door-overlap refusal is translated for a Spanish customer', async () =
     deps: deps(R({ task: 'surface_area', target: 'driveway', ruler: 'double_garage_door', language: 'es' }), { driveway: door, 'garage door': door }),
   });
   assert.notEqual(r.ok, true);
-  assert.match(r.ask, /Mi contorno de la entrada quedó sobre la puerta del garaje en vez del suelo/);
+  assert.match(r.ask, /No pude marcar bien la entrada: el contorno quedó sobre la puerta del garaje en vez del suelo/);
   assert.doesNotMatch(r.ask, /ended up on/);
 });
 
@@ -218,18 +218,51 @@ test('the surface range is wide enough to hold both real driveway results (one r
   assert.ok(sqft / 0.8 <= high, 'holds a number that read 20% low');
   assert.equal(r.confidence, 'fair');
   assert.match(r.answer, /^Your driveway is about [\d,]+ sq ft/);
-  assert.match(r.answer, /A single photo can be off by up to a third, so plan on somewhere between [\d,]+ and [\d,]+ sq ft until you tape it\. \(Measured against the/);
+  assert.match(r.answer, /A single photo can be off by a third or more, so plan on somewhere between [\d,]+ and [\d,]+ sq ft until you tape it\. \(Measured against the/);
   assert.match(r.headline, /^Roughly /);
   assert.doesNotMatch(r.answer, /\bexactly\b|\bmeasured to\b/i);
   // sealer is still bought for the high end only
   assert.equal(r.numbers.find((n) => n.label === 'Concrete sealer').value, `${Math.ceil(high / SEALER.concrete.perGallon)} gallons per coat`);
-  assert.ok(r.steps[0].startsWith('Tape the width and length once'));
+  assert.ok(r.steps[0].startsWith('Tape the width and length once') && /a third or more\.$/.test(r.steps[0]));
+  assert.ok(!/\d\.\d+ ft wide/.test(r.answer), 'whole feet in the size words');
 });
 
-test('the page labels a surface estimate "Rough estimate" (English and Spanish), not "Close estimate"', async () => {
-  const { readFileSync } = await import('node:fs');
-  const js = readFileSync(new URL('../public/measure.js', import.meta.url), 'utf8');
-  assert.match(js, /surfaceFair: 'Rough estimate'/);
-  assert.match(js, /surfaceFair: 'Estimado aproximado'/);
-  assert.match(js, /r\.task === 'surface_area' && r\.confidence === 'fair' \? T\.surfaceFair/);
+test('the confidence badge says "Rough estimate" for a surface and "Close estimate" for everything else', async () => {
+  const { confLabel } = await import('../public/conflabel.js');
+  const T = { conf: { good: 'Measured', fair: 'Close estimate', low: 'Rough — see tip' }, surfaceFair: 'Rough estimate' };
+  assert.equal(confLabel({ task: 'surface_area', confidence: 'fair' }, T), 'Rough estimate');
+  assert.equal(confLabel({ task: 'surface_area', confidence: 'low' }, T), 'Rough — see tip');
+  assert.equal(confLabel({ task: 'floor_tile', confidence: 'fair' }, T), 'Close estimate');
+  assert.equal(confLabel({ task: 'floor_tile', confidence: 'good' }, T), 'Measured');
+  const es = { conf: { fair: 'Estimado cercano' }, surfaceFair: 'Estimado aproximado' };
+  assert.equal(confLabel({ task: 'surface_area', confidence: 'fair' }, es), 'Estimado aproximado');
+});
+
+test('routing sanity: size questions about stoops route to square feet; page, ceiling, stairs and paint talk does not', () => {
+  const yes = ['how big is my front stoop', 'sealer for my front steps', 'how many square feet is my porch', 'how much concrete for the landing', 'what size is my back porch', 'how long is the porch'];
+  const no = ['will my couch fit on the porch', 'gap between the porch and the fence', 'how tall are my front steps', 'how far is the stoop from the street', 'my landing page is slow, how big is it', 'how big is the front porch ceiling', 'how wide is the landing at the top of the stairs', 'how much paint for the porch floor', 'what is a stoop'];
+  for (const t of yes) assert.equal(guessFromText(t).task, 'surface_area', t);
+  for (const t of no) assert.notEqual(guessFromText(t).task, 'surface_area', t);
+});
+
+test('a "steps" target is kept (asked of SAM as a concrete slab), never rewritten to a driveway', async () => {
+  const asked = [];
+  const s = driveway(TWO_CAR);
+  const r = await measureAnything({ dataUrl: 'x', text: 'how big are my front steps, I need sealer', deps: deps(R({ task: 'size', target: 'object', ruler: 'card' }), { 'concrete slab': s.driveway, 'front door': s['garage door'] }, asked) });
+  assert.equal(r.task, 'surface_area');
+  assert.equal(r.read.target, 'front steps');
+  assert.ok(asked.includes('concrete slab') && asked.includes('front door') && !asked.includes('driveway'), asked.join());
+});
+
+test('Spanish nouns for stoop, steps and slab read correctly', async () => {
+  const { es } = await import('../src/es.js');
+  const sent = (n) => `Your ${n} is about 43 sq ft (about 7 ft wide by 6 ft long). A single photo can be off by a third or more, so plan on somewhere between 280 and 600 sq ft until you tape it. (Measured against the front door.) Buy 3 gallons of concrete sealer per coat.`;
+  assert.match(es(sent('stoop')), /^Tu pórtico mide unos 43 pies cuadrados \(unos 7 pies de ancho por 6 de largo\), pero con una sola foto el error puede ser de un tercio o más, así que cuenta con entre 280 y 600 pies cuadrados hasta que la midas con cinta\./);
+  assert.match(es(sent('front steps')), /^Tus escalones de la entrada miden unos 43/);
+  assert.match(es(sent('landing')), /^Tu rellano mide/);
+  const refusal = (n) => `My outline of the ${n} ended up on the front door instead of the ground, so I held off on a number. Step back so the ground in front of the door is in the shot, and send it again.`;
+  assert.equal(es(refusal('stoop')), 'No pude marcar bien el pórtico: el contorno quedó sobre la puerta de entrada en vez del suelo, así que prefiero no darte un número. Aléjate para que se vea el suelo frente a la puerta, y mándala otra vez.');
+  assert.doesNotMatch(es(refusal('concrete slab')), /de el /);
+  assert.match(es(refusal('concrete slab')), /No pude marcar bien la losa de concreto:/);
+  assert.equal(es('Buy for the high end of the range, or tape it first and buy for that; return unopened extras'), 'Compra para el extremo más alto del rango, o mídelo primero con cinta y compra según eso; devuelve lo que no abras');
 });

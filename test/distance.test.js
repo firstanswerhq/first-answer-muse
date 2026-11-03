@@ -114,7 +114,9 @@ test('a gap that runs toward the camera is flagged depthwise (straight on and sl
       { name: 'door', axis: 'z', at: 40, from: -1.5, to: 1.5, top: 80 / 12 },
     ]);
     const cal = calibrate({ frame, focal35: null, ref: objects.door, refKind: 'interior_door', groundLines: [contactPoints(objects.near, frame), contactPoints(objects.far, frame)] });
+    if (yawDeg === 0) assert.equal(cal.ok, true, 'the straight-on case must set up');
     if (!cal.ok) continue; // a camera this turned can't be set up at all, which is its own refusal
+    if (yawDeg === 0) assert.ok(gapBetween(objects.near, objects.far, cal, frame).depthwise === true, 'straight-on is flagged');
     const g = gapBetween(objects.near, objects.far, cal, frame);
     assert.ok(g.ok && g.depthwise === true && !g.tightest, `yaw ${yawDeg}: ${JSON.stringify(g)}`);
     flagged++;

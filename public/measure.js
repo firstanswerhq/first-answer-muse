@@ -43,6 +43,8 @@ function stageOf(step, n = 1) {
   return 2;
 }
 
+import { confLabel } from './conflabel.js';
+
 const CONF = {
   good: ['good', 'Measured'],
   fair: ['fair', 'Close estimate'],
@@ -366,7 +368,7 @@ function renderReply(r, dataUrl, dataUrls = [dataUrl]) {
   body.className = 'r-body';
   const T = L(r);
   // A surface (driveway, stoop) estimate carries a ±35% range, so its middle label is "Rough estimate", not "Close estimate".
-  const conf = CONF[r.confidence] && [CONF[r.confidence][0], r.task === 'surface_area' && r.confidence === 'fair' ? T.surfaceFair : T.conf[r.confidence]];
+  const conf = CONF[r.confidence] && [CONF[r.confidence][0], confLabel(r, T)];
   const nums = (r.numbers || []).filter((n) => n && (n.label || n.value != null));
   const shopping = (r.shopping || []).filter(Boolean);
   const steps = (r.steps || []).filter(Boolean);
