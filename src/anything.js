@@ -971,7 +971,7 @@ export function boxInside(a, b) {
 }
 
 // Driveway, patio, slab: SAM outlines the surface and the door; measure.js adds up real square feet
-// row by row using the door's height as the ruler and the surface's edges for the horizon.
+// row by row using the door as the ruler and the surface's edges for the horizon.
 async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsFor, sam }) {
   const front = read.ruler === 'front_door';
   const concepts = [read.target || 'driveway', front ? 'front door' : 'garage door'];
@@ -1002,7 +1002,7 @@ async function surfaceFlow({ dataUrl, live, read, pipeline, focal35, text, segsF
   const onDoor = (dSeg.objects || []).find((o) => o.box && surface.box && (o === door || (o.c ?? 1) >= 0.5) && boxInside(surface.box, o.box) > 0.6);
   if (onDoor) return finishErr(read, pipeline, `My outline of the ${concepts[0]} ended up on the ${front ? 'front door' : 'garage door'} instead of the ground, so I held off on a number. Step back so the ground in front of the ${front ? 'door' : 'garage door'} is in the shot, and send it again.`, null, overlay);
   const hfovDeg = focal35 && focal35 > 8 && focal35 < 300 ? (2 * Math.atan(18 / focal35) * 180) / Math.PI : 69;
-  const m = measureSurface({ surface, ref: door, refKind, frame, hfovDeg });
+  const m = measureSurface({ surface, ref: door, refKind, frame, hfovDeg, raisedDoor: front && STOOP_WORDS.test(String(concepts[0]).toLowerCase()) });
   pipeline.add({ model: 'first-answer math', step: `square feet against the ${R.label}`, result: { sqft: m.sqft, low: m.low, high: m.high, method: m.method, confidence: m.confidence, cameraHeightFt: m.cameraHeightFt } });
   if (!m.ok) return finishErr(read, pipeline, `I couldn’t measure the ${concepts[0]} from that angle. Stand at the street end, straight on, with the whole ${concepts[0]} and the ${front ? 'door' : 'garage door'} in the shot.`, null, overlay);
   const t = String(text).toLowerCase();

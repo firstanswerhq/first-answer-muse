@@ -102,16 +102,40 @@ export function dominantLine(pts, tol = 3) {
  * refKind: key of REFERENCES. frame: { w, h } of the photo. hfovDeg: camera field of view on the long side.
  * Returns { ok, sqft, low, high, widthFt, lengthFt, cameraHeightFt, method, confidence, reason }.
  */
-export function measureSurface({ surface, ref, refKind, frame, hfovDeg = 69 }) {
+export function measureSurface({ surface, ref, refKind, frame, hfovDeg = 69, raisedDoor = false }) {
   const R = REFERENCES[refKind];
   if (!surface || !ref || !R || !frame) return { ok: false, reason: 'need a surface, a reference and the photo size' };
+  const rows = maskRows(surface).filter((r) => r.w >= 2);
+  return measureSurfaceRows({ rows, refBox: ref.box, refKind, frame, hfovDeg, raisedDoor });
+}
+
+// The same measurement from rows already read off the mask (so tests can feed real outlines without SAM).
+// raisedDoor: the surface is a stoop, porch or landing right at a front door that sits on a sill (the caller knows this from the question).
+export function measureSurfaceRows({ rows, refBox, refKind, frame, hfovDeg = 69, raisedDoor = false }) {
+  const R = REFERENCES[refKind];
+  if (!R || !refBox || !frame || !Array.isArray(rows)) return { ok: false, reason: 'need a surface, a reference and the photo size' };
+  if (rows.some((r) => !Number.isFinite(r.y) || !Number.isFinite(r.w) || !Number.isFinite(r.h) || !Number.isFinite(r.left) || !Number.isFinite(r.right))) return { ok: false, reason: 'unreadable outline' };
+  const ref = { box: refBox };
   const refW = ref.box.x2 - ref.box.x1 + 1, refH = ref.box.y2 - ref.box.y1 + 1;
   if (refW < 12 || refH < 8) return { ok: false, reason: 'reference too small in the photo' };
-  // Scale at the reference from its HEIGHT: a door's height doesn't shrink when the photo is taken at an angle.
-  const sRef = R.heightFt / refH; // feet per pixel at the reference's distance
-  const yRef = ref.box.y2; // the reference's base: where it meets the ground
-  const rows = maskRows(surface).filter((r) => r.w >= 2);
   if (rows.length < 8) return { ok: false, reason: 'surface too small in the photo' };
+  // Scale at the reference. By default its HEIGHT: a door's height doesn't shrink when the photo is taken at an angle.
+  // For a stoop or porch at a front door the height is unreliable (80 in, 96 in or glass doors, and the top is often cut off by the
+  // photo's edge), while the width is nearly always 3 ft, so there it uses the width (unless the door runs off the side of the photo).
+  // The width shrinks when the photo is taken at an angle (area is off by 1 / cos squared), so when the door's top is in the shot
+  // and the two scales disagree by more than 20%, the answer is marked low confidence.
+  const sW = R.widthFt / refW, sH = R.heightFt / refH;
+  const sideCut = ref.box.x1 <= 2 || ref.box.x2 >= frame.w - 2;
+  const useWidth = raisedDoor && refKind === 'front_door' && !sideCut;
+  const sRef = useWidth ? sW : sH; // feet per pixel at the reference's distance
+  const scalesDisagree = useWidth && ref.box.y1 > 2 && Math.abs(sW / sH - 1) > 0.2;
+  // The reference's base: where it meets the ground. A front door sits on a sill a few inches above the slab, so its own
+  // bottom edge sits higher in the photo than the ground in front of it. For a stoop or porch, when the surface starts a little
+  // below the door's base, right in front of it, that edge of the surface is the ground line (the gap is at most a third of the
+  // door's width in pixels). Anything else keeps the door's own base: a patio a few feet from the door must not be pulled in.
+  let yRef = ref.box.y2;
+  const inFront = raisedDoor && refKind === 'front_door' && rows.find((r) => Math.min(r.right, ref.box.x2) - Math.max(r.left, ref.box.x1) >= 0.5 * refW);
+  if (inFront && inFront.y - inFront.h / 2 > yRef + 4 && inFront.y - yRef < 0.35 * refW) yRef = inFront.y - inFront.h / 2;
   const pixelArea = rows.reduce((t, r) => t + r.w * r.h, 0);
 
   // The horizon: where the surface's two long edges meet. Points cut off by the photo's edge don't count.
@@ -156,14 +180,15 @@ export function measureSurface({ surface, ref, refKind, frame, hfovDeg = 69 }) {
   const cameraHeightFt = sRef * (yRef - yH);
   // Sanity: a phone is held 3-7 ft up, and the surface is wider than the door it leads to.
   const plausible = how === 'edges' && cameraHeightFt > 3 && cameraHeightFt < 8 && lengthFt > 5 && lengthFt < 250 && widthFt >= R.widthFt * 0.6 && widthFt < 80;
-  const out = finish({ sqft, method: `perspective (horizon from ${how})`, confidence: plausible ? 'good' : 'low', widthFt, lengthFt, cameraHeightFt, refKind, R });
+  const out = finish({ sqft, method: `perspective (horizon from ${how})`, confidence: plausible && !scalesDisagree ? 'good' : 'low', widthFt, lengthFt, cameraHeightFt, refKind, R });
   out.clipped = clippedRows > rows.length * 0.1; // part of the surface runs out of the photo
   return out;
 }
 
 function finish({ sqft, method, confidence, widthFt, lengthFt, cameraHeightFt, refKind, R }) {
   // ±35% when the geometry checks out (±40% when it doesn't): the door's height (7 or 8 ft) and a slab whose sides flare both move the area a lot.
-  // Real tape-measured driveways so far: one read 15-20% low, the other 32% high (340 against a true 257.9 sq ft), so the error swings both ways.
+  // Real tape-measured photos so far: one driveway read 15-20% low, another 32% high (340 against a true 257.9 sq ft), and a front
+  // stoop read 7% low (40 against 42.9) once the door's sill was handled, so the error swings both ways.
   const spread = confidence === 'good' ? 0.35 : 0.4;
   const r10 = (x) => Math.round(x / 10) * 10;
   const r1 = (x) => (x == null ? null : Math.round(x));
