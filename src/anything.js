@@ -438,7 +438,9 @@ const GLASS_ALTS = ['star-shaped crack in glass', 'small crack in windshield', '
 // Stoops, porches and patios: other plain wordings for the same concrete, tried only while nothing is found (surface jobs only).
 const SLAB_ALTS = ['concrete pad', 'concrete step', 'porch floor'];
 const PATIO_ALTS = ['concrete slab', 'paved patio area'];
-const altsFor = (concept, task) => (concept === 'sheet of paper' ? PAPER_ALTS : task === 'windshield_chip' && (concept === 'chip' || concept === 'crack') ? GLASS_ALTS : task === 'surface_area' && concept === 'concrete slab' ? SLAB_ALTS : task === 'surface_area' && concept === 'patio' ? PATIO_ALTS : []);
+// Floors to tile: Spark sometimes names the room ("elevator floor", "bathroom floor") and SAM finds nothing for that wording, so the plain word is tried next.
+const FLOOR_ALTS = ['floor', 'tile floor'];
+const altsFor = (concept, task) => (concept === 'sheet of paper' ? PAPER_ALTS : task === 'windshield_chip' && (concept === 'chip' || concept === 'crack') ? GLASS_ALTS : task === 'surface_area' && concept === 'concrete slab' ? SLAB_ALTS : task === 'surface_area' && concept === 'patio' ? PATIO_ALTS : task === 'floor_tile' && concept !== 'floor' ? FLOOR_ALTS : []);
 export async function segmentWithAlts(live, dataUrl, concept, task) {
   let seg = await live.segment(dataUrl, concept);
   for (const alt of altsFor(concept, task)) {
@@ -789,7 +791,7 @@ async function floorMultiFlow({ dataUrls, text, live, read, pipeline, focal35 = 
   const t0 = performance.now();
   let segs;
   try {
-    segs = await Promise.all(dataUrls.map((d, i) => Promise.all(concepts.map((c) => segmentWithAlts(live, d, c))).then((sg) => {
+    segs = await Promise.all(dataUrls.map((d, i) => Promise.all(concepts.map((c) => segmentWithAlts(live, d, c, 'floor_tile'))).then((sg) => {
       pipeline.add({ model: 'sam-3.1', step: `${label(i)}: outline ${concepts.join(' and ')}`, ms: Math.round(performance.now() - t0), result: samResult(concepts, sg) });
       return sg;
     })));

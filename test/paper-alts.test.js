@@ -42,3 +42,15 @@ test('a chip SAM cannot outline is retried with other glass wordings, stopping a
   await segmentWithAlts({ segment: async (_d, c) => { none.push(c); return { objects: [] }; } }, 'x', 'coin');
   assert.deepEqual(none, ['coin']);
 });
+
+test('a floor to tile that SAM cannot find under the room name ("elevator floor") is retried as plain "floor"', async () => {
+  const asked = [];
+  const live = { segment: async (_d, c) => { asked.push(c); return { objects: c === 'floor' ? [{ c: 0.8 }] : [] }; } };
+  const seg = await segmentWithAlts(live, 'x', 'elevator floor', 'floor_tile');
+  assert.deepEqual(asked, ['elevator floor', 'floor']);
+  assert.equal(seg.objects.length, 1);
+  // other jobs are not touched
+  const other = [];
+  await segmentWithAlts({ segment: async (_d, c) => { other.push(c); return { objects: [] }; } }, 'x', 'elevator floor', 'size');
+  assert.deepEqual(other, ['elevator floor']);
+});
